@@ -81,6 +81,14 @@ impl<W: Write> TraceWriter<W> {
         self.bytes_written
     }
 
+    /// Write every buffered event as a complete chunk and flush the underlying writer, so a
+    /// capture that is killed afterwards still leaves a readable file up to this point.
+    pub fn flush(&mut self) -> Result<()> {
+        self.flush_chunks()?;
+        self.out.flush()?;
+        Ok(())
+    }
+
     /// Write everything buffered and the footer, and return the underlying writer.
     pub fn finish(mut self, dropped: Dropped) -> Result<W> {
         self.flush_chunks()?;

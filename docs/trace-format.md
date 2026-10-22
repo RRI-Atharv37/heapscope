@@ -83,6 +83,34 @@ neither their Alloc nor their Free is written, and the totals per stack are writ
 (`max_concurrent` is the most dropped allocations of that stack alive at once). Summing
 `allocs`, `bytes` and `total_lifetime_ns` over all ChurnSummary events gives exactly what was dropped.
 
+## What the HeapScope capture writes
+
+These are conventions of the capture DLL (S1.4), not requirements of the format:
+
+- **Heap allocations.** The DLL sees calls to `RtlAllocateHeap`, `RtlReAllocateHeap` and
+  `RtlFreeHeap`, which only receive the requested size, so `size == requested` for kind 0. The
+  Windows heap reports the same number back from `HeapSize`. Under the Debug CRT the requested size
+  includes the CRT's own 52-byte header and guards.
+- **Frees carry no stack** (`stack = 0`): capturing a stack on every free would cost more than the
+  information is worth. Analysis attributes a free to the stack of the allocation it matches.
+- **Reallocs** are one Realloc event stamped *before* the real call, so no allocation another
+  thread makes at the old address can sort ahead of it. A sampled capture turns a realloc whose old
+  or new address was not sampled into a plain Free or Alloc.
+- **Ordering.** Each thread writes into its own buffer, so events from different threads are only
+  roughly in time order. Sort by `ts` (stable) before replaying; an event and its matching free can
+  share a timestamp only if the clock did not advance between them (the clock ticks every 100 ns).
+- **`pdb_guid`** holds the 16 bytes exactly as stored in the module's CodeView (`RSDS`) debug record
+  (the little-endian GUID layout), so they can be compared byte for byte with the PDB's identity.
+- **Churn totals** are emitted when a thread ends, when capture stops and at exit, possibly several
+  times per stack (sum them). `max_concurrent` counts allocations of the stack that were *held for
+  the lifetime test* at the same time, so it can slightly exceed the true number: some of the held
+  allocations are later written out normally.
+- **Sampling** keeps an allocation when a hash of its address falls in 1/N, applied to the Free as
+  well, so a kept allocation always has its free. Multiply counts and bytes of a sampled trace by
+  N for an estimate.
+- **Attached captures** (`attached = true` in the header) miss every allocation made before the
+  attach, so a Free whose address was never allocated in the trace is normal there; count and ignore it.
+
 ## Footer chunk (last chunk, raw)
 
 `event_count` · `stack_count` · `dropped_overflow` · `dropped_min_lifetime` · `dropped_sampling`,

@@ -1,12 +1,19 @@
 // growth: memory grows in phases, then partly shrinks. Peak is after phase 2; phase 1 is released in phase 3.
 //   phase 1: +4 MiB (64 x 64 KiB)   phase 2: +8 MiB (128 x 64 KiB)   phase 3: free phase 1
 // usage: growth [--expected file]
+//        growth --wait-for-attach      (for `heapscope attach`: prints "PID <n>", then obeys stdin lines)
+//            grow N    allocate N more 64 KiB blocks, keep them, reply "grown N"
+//            shrink N  free N of the blocks allocated by `grow`, reply "shrunk N"
+//            quit      exit with code 0
 #include "../common/expected.hpp"
 
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <string>
 #include <thread>
+#include <windows.h>
 
 #if defined(_MSC_VER)
 #define NOINLINE __declspec(noinline)
@@ -24,7 +31,35 @@ NOINLINE static void shrink_phase_3() { for (auto& p : g_phase1) { std::free(p);
 
 static void pause_ms(int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
 
+static void* g_attach_blocks[4096];
+static unsigned g_attach_count = 0;
+
+NOINLINE static void attach_grow(unsigned n) {
+    for (unsigned i = 0; i < n && g_attach_count < 4096; ++i) g_attach_blocks[g_attach_count++] = std::malloc(kBlock);
+}
+
+NOINLINE static void attach_shrink(unsigned n) {
+    for (unsigned i = 0; i < n && g_attach_count > 0; ++i) std::free(g_attach_blocks[--g_attach_count]);
+}
+
+static int wait_for_attach() {
+    std::printf("PID %lu\n", (unsigned long)GetCurrentProcessId());
+    std::fflush(stdout);
+    char line[128];
+    while (std::fgets(line, sizeof line, stdin)) {
+        unsigned n = 0;
+        if (std::sscanf(line, "grow %u", &n) == 1) { attach_grow(n); std::printf("grown %u\n", n); }
+        else if (std::sscanf(line, "shrink %u", &n) == 1) { attach_shrink(n); std::printf("shrunk %u\n", n); }
+        else if (std::strncmp(line, "quit", 4) == 0) break;
+        std::fflush(stdout);
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i)
+        if (std::strcmp(argv[i], "--wait-for-attach") == 0) return wait_for_attach();
+
     grow_phase_1(); pause_ms(50);
     grow_phase_2(); pause_ms(50);
     shrink_phase_3(); pause_ms(50);

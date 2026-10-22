@@ -13,6 +13,24 @@ build = "build.rs"
 name = "heapscope_capture"
 crate-type = ["cdylib", "rlib"]
 
+[dependencies]
+heapscope-control = { path = "../heapscope-control" }
+heapscope-trace = { path = "../heapscope-trace" }
+minhook = "0.9"
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_Environment",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Performance",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+] }
+
 [build-dependencies]
 embed-resource = "3"
 

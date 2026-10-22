@@ -18,6 +18,6 @@ add_link_options(/DEBUG /INCREMENTAL:NO)
 # Dynamic CRT by default. HeapScope hooks the ntdll heap layer, so a static CRT (/MT) is also covered.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
-foreach(sample basic-alloc leak growth custom-pool)
+foreach(sample basic-alloc leak growth custom-pool churn multithread)
   add_executable(${sample} ${sample}/main.cpp)
 endforeach()
