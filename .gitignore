@@ -18,3 +18,6 @@ target/
 # Report front-end (S3)
 report/node_modules/
 report/dist/
+
+# Committed test fixtures
+!crates/heapscope-trace/tests/fixtures/*.hstrace
