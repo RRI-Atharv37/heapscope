@@ -1,0 +1,36 @@
+name: ci
+
+# Private repo: Windows runners cost double minutes, so only PRs and main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Caching is for CI only. The signed release build (release.yml, S4.4) must not cache.
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny check
+      - name: Build samples (CMake)
+        run: |
+          cmake -S samples -B build/samples
+          cmake --build build/samples --config RelWithDebInfo

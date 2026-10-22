@@ -1,0 +1,20 @@
+# Private planning docs
+.project/
+
+# Build output
+build/
+out/
+target/
+.vs/
+*.hstrace
+*.hstrace-spike
+
+# Local tooling (not part of the product)
+.playwright-mcp/
+.claude/
+.agents/
+.vscode/
+
+# Report front-end (S3)
+report/node_modules/
+report/dist/

@@ -1,0 +1,7 @@
+[build]
+target = "x86_64-pc-windows-msvc"
+
+# Static CRT: the capture DLL is injected into arbitrary processes and must not depend on
+# (or pull in) the target's vcruntime.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
