@@ -29,8 +29,10 @@ NOINLINE static void pool_leak_site(FixedPool& pool) {
 int main(int argc, char** argv) {
     {
         FixedPool pool(1024);  // 1024 x 64 B = 64 KiB backing block
+        HEAPSCOPE_MARK("pool-ready");
         pool_user_a(pool);
         pool_leak_site(pool);
+        HEAPSCOPE_MARK("pool-done");
 
         hs_expected::Expected e("custom-pool");
         auto& a = e.site("pool_user_a", "pool");

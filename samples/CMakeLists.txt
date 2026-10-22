@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
-project(heapscope_samples CXX)
+project(heapscope_samples C CXX)
 
+set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -21,3 +22,6 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 foreach(sample basic-alloc leak growth custom-pool churn multithread)
   add_executable(${sample} ${sample}/main.cpp)
 endforeach()
+
+# Plain C: proves include/heapscope/heapscope.h compiles as C and works from several threads.
+add_executable(header-c header-c/main.c)

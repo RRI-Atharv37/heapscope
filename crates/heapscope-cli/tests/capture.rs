@@ -444,3 +444,52 @@ fn a_killed_target_leaves_a_readable_trace_without_a_footer() {
     );
     assert_eq!(r.count_allocs_of_size(65_536), 4);
 }
+
+#[test]
+fn custom_pool_opt_in_shows_each_pool_object_with_its_call_path_and_markers() {
+    let Some(dir) = samples_dir() else { return };
+    let (r, expected_path, _) = run_sample(&dir, "custom-pool", "pool-optin", &[], &[]);
+    assert_matches_expected(&r, &read_expected(&expected_path));
+    let leak = r
+        .live
+        .values()
+        .find(|b| b.size == 64)
+        .expect("pool_leak_site block")
+        .stack;
+    assert_eq!((r.live_at(leak).allocs, r.live_at(leak).bytes), (50, 3_200));
+    assert!(r.stack_reaches_module(leak, "custom-pool.exe"));
+    let labels: Vec<&str> = r.markers.iter().map(|(_, l)| l.as_str()).collect();
+    assert_eq!(labels, ["pool-ready", "pool-done"]);
+}
+
+#[test]
+fn header_compiles_as_c_and_macros_work_from_racing_threads() {
+    let Some(dir) = samples_dir() else { return };
+    if !sample(&dir, "header-c").is_file() {
+        assert!(
+            std::env::var_os("HEAPSCOPE_REQUIRE_SAMPLES").is_none(),
+            "header-c sample is not built"
+        );
+        eprintln!("skipped: header-c sample is not built");
+        return;
+    }
+    let (r, _, _) = run_sample(&dir, "header-c", "header-c", &[], &[]);
+    let threads = r.site_of_size(32, 400).expect("thread allocations");
+    assert_eq!(
+        (r.live_at(threads).allocs, r.live_at(threads).bytes),
+        (400, 12_800)
+    );
+    let pool = r.site_of_size(48, 10).expect("pool_user_c allocations");
+    assert_eq!((r.live_at(pool).allocs, r.live_at(pool).bytes), (5, 240));
+    // The resize: old block freed, one 96-byte block live.
+    let resized: Vec<_> = r.live.values().filter(|b| b.size == 96).collect();
+    assert_eq!(resized.len(), 1);
+    assert!(r.stack_reaches_module(resized[0].stack, "header-c.exe"));
+    let live_of = |size| r.live.values().filter(|b| b.size == size).count();
+    // The CRT keeps a few live blocks of its own, so these are lower bounds (the exact counts per
+    // call site are asserted above).
+    assert!(live_of(32) >= 400 && live_of(48) >= 5);
+    assert_eq!(live_of(96), 1);
+    let labels: Vec<&str> = r.markers.iter().map(|(_, l)| l.as_str()).collect();
+    assert_eq!(labels, ["c-start", "c-end"]);
+}

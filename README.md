@@ -43,9 +43,10 @@ local builds; see [capture options](docs/capture-options.md#attach) for what a b
 | `crates/heapscope-capture` | `heapscope_capture.dll`, injected into the profiled process |
 | `crates/heapscope-trace` | the `.hstrace` format: writer and streaming reader |
 | `crates/heapscope-control` | the control block the CLI and the injected DLL share |
-| `include/heapscope` | optional C/C++ header for custom allocators |
+| `include/heapscope` | optional MIT-licensed C/C++ header for custom allocators, see [custom allocators](docs/custom-allocators.md) |
 | `samples` | small C++ programs with known allocation behaviour |
 
 ## Licence
 
-GPL-3.0-only, see [LICENSE](LICENSE).
+GPL-3.0-only, see [LICENSE](LICENSE). The header in `include/heapscope` is MIT, see
+[LICENSE-MIT](include/heapscope/LICENSE-MIT).
