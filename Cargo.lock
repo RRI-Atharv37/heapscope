@@ -180,7 +180,9 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "embed-resource",
+ "heapscope-analysis",
  "heapscope-control",
+ "heapscope-symbols",
  "heapscope-trace",
  "windows-sys",
 ]

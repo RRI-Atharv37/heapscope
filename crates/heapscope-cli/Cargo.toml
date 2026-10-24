@@ -15,7 +15,9 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+heapscope-analysis = { path = "../heapscope-analysis" }
 heapscope-control = { path = "../heapscope-control" }
+heapscope-symbols = { path = "../heapscope-symbols" }
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Security",

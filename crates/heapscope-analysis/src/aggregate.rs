@@ -5,7 +5,11 @@ use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
 use crate::filters::Filter;
-use crate::model::{MarkerInfo, NodeId, PathStats, TimelinePoint, Totals};
+use heapscope_trace::AllocKind;
+
+use crate::model::{
+    LiveGroup, MarkerInfo, NodeId, ObjectKind, PathStats, Snapshot, TimelinePoint, Totals,
+};
 use crate::peak::PeakTracker;
 use crate::trace::{MarkerEvent, Op, OpKind};
 
@@ -37,6 +41,7 @@ struct Block {
     size: u64,
     node: NodeId,
     ts: u64,
+    kind: AllocKind,
 }
 
 /// What one operation did to the live set.
@@ -93,11 +98,19 @@ impl Replayer {
         }
     }
 
-    fn acquire(&mut self, addr: u64, op: &Op, node: NodeId, emit: &mut dyn FnMut(Effect)) {
+    fn acquire(
+        &mut self,
+        addr: u64,
+        op: &Op,
+        node: NodeId,
+        kind: AllocKind,
+        emit: &mut dyn FnMut(Effect),
+    ) {
         let block = Block {
             size: op.size,
             node,
             ts: op.ts,
+            kind,
         };
         if let Some(old) = self.live.insert(addr, block) {
             self.bytes -= old.size;
@@ -118,20 +131,48 @@ impl Replayer {
         });
     }
 
+    /// The blocks still live, grouped by call path and kind of object.
+    pub(crate) fn live_groups(&self) -> Vec<LiveGroup> {
+        let mut groups: HashMap<(NodeId, ObjectKind), LiveGroup> = HashMap::new();
+        for b in self.live.values() {
+            let kind = ObjectKind::from(b.kind);
+            let g = groups.entry((b.node, kind)).or_insert(LiveGroup {
+                node: b.node,
+                kind,
+                allocs: 0,
+                bytes: 0,
+                oldest_ts_ns: b.ts,
+                newest_ts_ns: b.ts,
+            });
+            g.allocs += 1;
+            g.bytes += b.size;
+            g.oldest_ts_ns = g.oldest_ts_ns.min(b.ts);
+            g.newest_ts_ns = g.newest_ts_ns.max(b.ts);
+        }
+        let mut out: Vec<LiveGroup> = groups.into_values().collect();
+        out.sort_by_key(|g| (g.node, g.kind));
+        out
+    }
+
     fn apply(&mut self, op: &Op, node: NodeId, admit: bool, emit: &mut dyn FnMut(Effect)) {
         match op.kind {
             OpKind::Alloc => {
                 if admit {
-                    self.acquire(op.addr, op, node, emit);
+                    self.acquire(op.addr, op, node, op.alloc_kind, emit);
                 }
             }
             OpKind::Free => self.release(op.addr, op.ts, emit),
             OpKind::Realloc => {
+                // A resized block stays the kind of object it was.
+                let kind = self
+                    .live
+                    .get(&op.old_addr)
+                    .map_or(op.alloc_kind, |b| b.kind);
                 if op.old_addr != 0 {
                     self.release(op.old_addr, op.ts, emit);
                 }
                 if admit {
-                    self.acquire(op.addr, op, node, emit);
+                    self.acquire(op.addr, op, node, kind, emit);
                 }
             }
         }
@@ -197,6 +238,8 @@ pub(crate) struct Collector {
     pub stats: Vec<PathStats>,
     pub totals: Totals,
     pub markers: Vec<MarkerInfo>,
+    /// The live set at each marker, parallel to `markers`.
+    pub snapshots: Vec<Snapshot>,
     pub peak: PeakTracker,
     timeline: Vec<Option<TimelinePoint>>,
     t0: u64,
@@ -219,6 +262,7 @@ impl Collector {
             stats: vec![PathStats::default(); nodes],
             totals: Totals::default(),
             markers: Vec::new(),
+            snapshots: Vec::new(),
             peak: PeakTracker::default(),
             timeline: vec![None; timeline_points.max(1)],
             t0,
@@ -292,6 +336,16 @@ impl Observer for Collector {
             label: m.label.clone(),
             live_bytes: state.bytes,
             live_allocs: state.allocs,
+        });
+        self.snapshots.push(Snapshot {
+            ts_ns: m.ts_ns,
+            live: state
+                .per_node
+                .iter()
+                .enumerate()
+                .filter(|(_, &(allocs, _))| allocs > 0)
+                .map(|(i, &(allocs, bytes))| (i as NodeId, allocs, bytes))
+                .collect(),
         });
     }
 }

@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use heapscope_trace::AllocKind;
+
 pub type NodeId = u32;
 /// The synthetic root every call path hangs from.
 pub const ROOT: NodeId = 0;
@@ -210,6 +212,57 @@ pub struct Totals {
     pub missed_frees: u64,
 }
 
+/// What a live allocation is, for grouping leak candidates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ObjectKind {
+    Heap,
+    /// Custom pool or arena registered through the C API.
+    Pool,
+    /// Virtual memory.
+    Virtual,
+    /// Kernel handle (no byte size).
+    Handle,
+}
+
+impl ObjectKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Heap => "heap",
+            Self::Pool => "pool",
+            Self::Virtual => "virtual",
+            Self::Handle => "handle",
+        }
+    }
+}
+
+impl From<AllocKind> for ObjectKind {
+    fn from(k: AllocKind) -> Self {
+        match k {
+            AllocKind::Heap => Self::Heap,
+            AllocKind::Pool => Self::Pool,
+            AllocKind::Virtual => Self::Virtual,
+        }
+    }
+}
+
+/// Allocations of one kind from one site that were still live when the trace ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveGroup {
+    pub node: NodeId,
+    pub kind: ObjectKind,
+    pub allocs: u64,
+    pub bytes: u64,
+    pub oldest_ts_ns: u64,
+    pub newest_ts_ns: u64,
+}
+
+/// The live set at one moment: `(node, live allocs, live bytes)` for every site with live memory.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Snapshot {
+    pub ts_ns: u64,
+    pub live: Vec<(NodeId, u64, u64)>,
+}
+
 /// How the trace was captured, so consumers can tell exact numbers from estimates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureInfo {
@@ -257,6 +310,10 @@ pub struct Analysis {
     pub peak: Peak,
     pub timeline: Vec<TimelinePoint>,
     pub markers: Vec<MarkerInfo>,
+    /// The live set at each marker, parallel to `markers`.
+    pub snapshots: Vec<Snapshot>,
+    /// Live at the end of the trace, by call path and kind of object (handles included).
+    pub live_groups: Vec<LiveGroup>,
     pub churn: Vec<ChurnEntry>,
     /// Threshold used to call an allocation short-lived.
     pub short_lived_ns: u64,

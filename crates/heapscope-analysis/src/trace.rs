@@ -7,7 +7,7 @@ use std::path::Path;
 
 use heapscope_symbols::ModuleInfo;
 use heapscope_trace::{
-    ChurnSummary, Error, Event, Footer, Header, StackId, StackTable, TraceReader,
+    AllocKind, ChurnSummary, Error, Event, Footer, Header, StackId, StackTable, TraceReader,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +28,17 @@ pub(crate) struct Op {
     pub old_addr: u64,
     pub size: u64,
     pub stack: StackId,
+    pub alloc_kind: AllocKind,
+}
+
+/// A kernel handle opened (`open`) or closed.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HandleOp {
+    pub ts: u64,
+    pub thread: u32,
+    pub handle: u64,
+    pub stack: StackId,
+    pub open: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -42,6 +53,7 @@ pub struct Trace {
     pub footer: Option<Footer>,
     pub stacks: StackTable,
     pub(crate) ops: Vec<Op>,
+    pub(crate) handles: Vec<HandleOp>,
     pub churn: Vec<(u64, ChurnSummary)>,
     pub markers: Vec<MarkerEvent>,
     pub modules: Vec<ModuleInfo>,
@@ -64,6 +76,7 @@ impl Trace {
             footer: None,
             stacks: StackTable::default(),
             ops: Vec::new(),
+            handles: Vec::new(),
             churn: Vec::new(),
             markers: Vec::new(),
             modules: Vec::new(),
@@ -91,6 +104,7 @@ impl Trace {
         }
         // Stable: operations that share a timestamp keep their file order.
         t.ops.sort_by_key(|o| o.ts);
+        t.handles.sort_by_key(|h| h.ts);
         t.markers.sort_by_key(|m| m.ts_ns);
         Ok(t)
     }
@@ -104,6 +118,7 @@ impl Trace {
             Event::Alloc {
                 ts_ns,
                 thread,
+                kind,
                 addr,
                 size,
                 stack,
@@ -116,6 +131,7 @@ impl Trace {
                 old_addr: 0,
                 size,
                 stack,
+                alloc_kind: kind,
             }),
             Event::Free {
                 ts_ns,
@@ -130,6 +146,7 @@ impl Trace {
                 old_addr: 0,
                 size: 0,
                 stack,
+                alloc_kind: AllocKind::Heap,
             }),
             Event::Realloc {
                 ts_ns,
@@ -147,6 +164,8 @@ impl Trace {
                 old_addr,
                 size: new_size,
                 stack,
+                // The replay gives a realloc the kind of the block it replaces.
+                alloc_kind: AllocKind::Heap,
             }),
             Event::Marker { ts_ns, label, .. } => self.markers.push(MarkerEvent { ts_ns, label }),
             Event::ModuleLoad {
@@ -167,7 +186,32 @@ impl Trace {
                 self.thread_names.insert(thread, name);
             }
             Event::ChurnSummary { ts_ns, summary } => self.churn.push((ts_ns, summary)),
-            Event::ModuleUnload { .. } | Event::HandleOpen { .. } | Event::HandleClose { .. } => {}
+            Event::HandleOpen {
+                ts_ns,
+                thread,
+                handle,
+                stack,
+                ..
+            } => self.handles.push(HandleOp {
+                ts: ts_ns,
+                thread,
+                handle,
+                stack,
+                open: true,
+            }),
+            Event::HandleClose {
+                ts_ns,
+                thread,
+                handle,
+                stack,
+            } => self.handles.push(HandleOp {
+                ts: ts_ns,
+                thread,
+                handle,
+                stack,
+                open: false,
+            }),
+            Event::ModuleUnload { .. } => {}
         }
     }
 }

@@ -1,5 +1,5 @@
-//! `heapscope` command-line entry point. `run` and `attach` capture; `analyze` and `diff` are stubs
-//! until the analysis core lands (S2).
+//! `heapscope` command-line entry point. `run` and `attach` capture; `diff` compares live memory;
+//! `analyze` is a stub until S2.5.
 
 mod commands;
 mod launch;
@@ -72,12 +72,27 @@ enum Command {
         /// Trace file to read
         trace: PathBuf,
     },
-    /// Compare two trace files
+    /// Compare the live memory of two trace files, or of two markers in one trace
     Diff {
         /// Baseline trace
         before: PathBuf,
-        /// Trace to compare against the baseline
-        after: PathBuf,
+        /// Trace to compare against the baseline (omit with --markers)
+        after: Option<PathBuf>,
+        /// Compare two markers of the baseline trace instead; '@end' is the end of the trace
+        #[arg(long, num_args = 2, value_names = ["FROM", "TO"])]
+        markers: Option<Vec<String>>,
+        /// Sites to list (0 for all)
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Hide sites whose live bytes changed by less than this
+        #[arg(long, value_name = "BYTES", default_value_t = 0)]
+        min_change: u64,
+        /// Frames from the allocation site that identify a call path across runs
+        #[arg(long, value_name = "N", default_value_t = 12, value_parser = clap::value_parser!(usize))]
+        depth: usize,
+        /// Also list sites that did not change
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -106,7 +121,26 @@ fn main() -> ExitCode {
             stack_depth: capture.stack_depth,
         }),
         Command::Analyze { .. } => not_implemented("analyze"),
-        Command::Diff { .. } => not_implemented("diff"),
+        Command::Diff {
+            before,
+            after,
+            markers,
+            limit,
+            min_change,
+            depth,
+            all,
+        } => commands::diff::run(commands::diff::DiffArgs {
+            before,
+            after,
+            markers: markers.and_then(|m| {
+                let mut it = m.into_iter();
+                Some((it.next()?, it.next()?))
+            }),
+            limit,
+            min_change,
+            depth,
+            include_unchanged: all,
+        }),
     };
     match result {
         Ok(code) => code,

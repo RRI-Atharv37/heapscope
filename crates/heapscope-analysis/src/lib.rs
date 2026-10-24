@@ -5,18 +5,23 @@
 
 mod aggregate;
 mod churn;
+pub mod diff;
 pub mod filters;
 pub mod frames;
+pub mod identity;
+pub mod leaks;
 pub mod model;
 mod peak;
+pub mod suppressions;
 mod trace;
 
 pub use filters::Filter;
 pub use heapscope_symbols::{Frame, FrameResolver};
 pub use model::{
-    Analysis, CallTree, CaptureInfo, ChurnEntry, FrameInfo, MarkerInfo, Node, NodeId, PathStats,
-    Peak, TimelinePoint, Totals, ROOT,
+    Analysis, CallTree, CaptureInfo, ChurnEntry, FrameInfo, LiveGroup, MarkerInfo, Node, NodeId,
+    ObjectKind, PathStats, Peak, Snapshot, TimelinePoint, Totals, ROOT,
 };
+pub use suppressions::{SuppressionRule, Suppressions};
 pub use trace::{MarkerEvent, Trace};
 
 use heapscope_trace::CaptureMode;
@@ -218,6 +223,13 @@ pub fn analyze(trace: &Trace, resolver: &mut dyn FrameResolver, opts: &Options) 
     }
 
     let churn = churn::detect(&collector.stats);
+    let mut live_groups = end.live_groups();
+    live_groups.extend(leaks::live_handles(
+        trace,
+        &paths.node_of,
+        &paths.stack_ok,
+        &opts.filter,
+    ));
     Analysis {
         capture,
         stats: std::mem::take(&mut collector.stats),
@@ -225,6 +237,8 @@ pub fn analyze(trace: &Trace, resolver: &mut dyn FrameResolver, opts: &Options) 
         peak: collector.peak.peak,
         timeline: collector.timeline(),
         markers: std::mem::take(&mut collector.markers),
+        snapshots: std::mem::take(&mut collector.snapshots),
+        live_groups,
         churn,
         short_lived_ns: short_ns,
         tree: paths.tree,
