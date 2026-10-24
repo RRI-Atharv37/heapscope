@@ -1,8 +1,8 @@
 # Reading leak and diff reports (draft)
 
 This explains what HeapScope's leak candidates and snapshot diffs mean, and how to silence the
-ones you know are fine. `heapscope diff` is available now; the leak report is produced by the
-analysis library and will be printed by `heapscope analyze` (S2.5).
+ones you know are fine. `heapscope analyze` prints the leak report (`--suppressions FILE` adds your own rules,
+`--no-builtin-suppressions` turns the built-in ones off), and `heapscope diff` compares traces.
 
 ## Leak candidates
 

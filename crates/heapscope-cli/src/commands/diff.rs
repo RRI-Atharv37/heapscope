@@ -10,6 +10,8 @@ use heapscope_analysis::diff::{self, Change, Diff, DiffOptions, Point};
 use heapscope_analysis::{analyze, Analysis, Options, Trace};
 use heapscope_symbols::{Options as SymOptions, Symbolizer};
 
+use super::{bytes, signed_bytes};
+
 pub struct DiffArgs {
     pub before: PathBuf,
     /// `None` when comparing two markers of `before`.
@@ -88,25 +90,6 @@ pub fn run(args: DiffArgs) -> Result<ExitCode, String> {
     };
     print(&d, &title, args.limit);
     Ok(ExitCode::SUCCESS)
-}
-
-fn bytes(n: u64) -> String {
-    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
-    if n < 1024 {
-        return format!("{n} B");
-    }
-    let mut v = n as f64 / 1024.0;
-    let mut unit = 0;
-    while v >= 1024.0 && unit + 1 < UNITS.len() {
-        v /= 1024.0;
-        unit += 1;
-    }
-    format!("{v:.1} {}", UNITS[unit])
-}
-
-fn signed_bytes(n: i64) -> String {
-    let sign = if n < 0 { '-' } else { '+' };
-    format!("{sign}{}", bytes(n.unsigned_abs()))
 }
 
 fn print(d: &Diff, title: &str, limit: usize) {

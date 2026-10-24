@@ -30,7 +30,7 @@ jobs:
         run: |
           cmake -S samples -B build/samples
           cmake --build build/samples --config RelWithDebInfo
-      - name: Test (includes `heapscope run`/`attach` on the samples)
+      - name: Test (includes `heapscope run`/`attach` and the ground-truth e2e suite on the samples)
         env:
           HEAPSCOPE_REQUIRE_SAMPLES: "1"
         run: cargo test --workspace --locked

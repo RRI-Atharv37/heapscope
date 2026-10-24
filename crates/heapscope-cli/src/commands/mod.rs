@@ -1,3 +1,4 @@
+pub mod analyze;
 pub mod attach;
 pub mod diff;
 pub mod run;
@@ -31,6 +32,25 @@ pub fn parse_duration_ms(text: &str, default_unit_ms: u64) -> Result<u64, String
 /// Absolute form of the output path, because the target may run in another directory.
 pub fn absolute_output(path: &Path) -> Result<PathBuf, String> {
     std::path::absolute(path).map_err(|e| format!("bad output path {}: {e}", path.display()))
+}
+
+pub fn bytes(n: u64) -> String {
+    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
+    if n < 1024 {
+        return format!("{n} B");
+    }
+    let mut v = n as f64 / 1024.0;
+    let mut unit = 0;
+    while v >= 1024.0 && unit + 1 < UNITS.len() {
+        v /= 1024.0;
+        unit += 1;
+    }
+    format!("{v:.1} {}", UNITS[unit])
+}
+
+pub fn signed_bytes(n: i64) -> String {
+    let sign = if n < 0 { '-' } else { '+' };
+    format!("{sign}{}", bytes(n.unsigned_abs()))
 }
 
 #[cfg(test)]

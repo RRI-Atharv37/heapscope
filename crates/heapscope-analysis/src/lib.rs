@@ -9,6 +9,7 @@ pub mod diff;
 pub mod filters;
 pub mod frames;
 pub mod identity;
+pub mod json;
 pub mod leaks;
 pub mod model;
 mod peak;

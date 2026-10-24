@@ -1,5 +1,5 @@
 //! `heapscope` command-line entry point. `run` and `attach` capture; `diff` compares live memory;
-//! `analyze` is a stub until S2.5.
+//! `analyze` summarises a trace.
 
 mod commands;
 mod launch;
@@ -71,6 +71,18 @@ enum Command {
     Analyze {
         /// Trace file to read
         trace: PathBuf,
+        /// Write the JSON summary here ('-' for standard output instead of the console report)
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<PathBuf>,
+        /// File of extra suppression rules (fn:, module:, file: lines)
+        #[arg(long, value_name = "FILE")]
+        suppressions: Option<PathBuf>,
+        /// Do not apply the built-in suppressions for start-up and loader allocations
+        #[arg(long)]
+        no_builtin_suppressions: bool,
+        /// Rows to list in each section (0 for all)
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
     },
     /// Compare the live memory of two trace files, or of two markers in one trace
     Diff {
@@ -120,7 +132,19 @@ fn main() -> ExitCode {
             min_lifetime_ms: capture.min_lifetime.unwrap_or(0),
             stack_depth: capture.stack_depth,
         }),
-        Command::Analyze { .. } => not_implemented("analyze"),
+        Command::Analyze {
+            trace,
+            output,
+            suppressions,
+            no_builtin_suppressions,
+            limit,
+        } => commands::analyze::run(commands::analyze::AnalyzeArgs {
+            trace,
+            output,
+            suppressions,
+            no_builtin_suppressions,
+            limit,
+        }),
         Command::Diff {
             before,
             after,
@@ -149,9 +173,4 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
-}
-
-fn not_implemented(name: &str) -> Result<ExitCode, String> {
-    eprintln!("heapscope {name}: not implemented yet");
-    Ok(ExitCode::from(2))
 }
