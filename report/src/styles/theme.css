@@ -1,0 +1,42 @@
+/* Colour tokens. Text pairs are at least 4.5:1 (7:1 for body text) in both schemes. */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --bg-raised: #f6f8fa;
+  --bg-hover: #eaeef2;
+  --fg: #1b1f24;
+  --fg-muted: #4b5560;
+  --border: #c9d1d9;
+  --accent: #0a58ad;
+  --accent-bg: #ddeeff;
+  --focus: #0a58ad;
+  --warn-bg: #fff1c9;
+  --warn-fg: #4d3200;
+  --warn-border: #d9a400;
+  --bad: #a4252a;
+  --good: #1a6b34;
+  --bar: #6aa4e0;
+  --flame-text: #111111;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1419;
+    --bg-raised: #171d24;
+    --bg-hover: #212a33;
+    --fg: #e6e9ec;
+    --fg-muted: #a3adb8;
+    --border: #36414d;
+    --accent: #78b8ff;
+    --accent-bg: #16314f;
+    --focus: #78b8ff;
+    --warn-bg: #3a2e0a;
+    --warn-fg: #ffdf9a;
+    --warn-border: #8a6a00;
+    --bad: #ff8f94;
+    --good: #6fd08c;
+    --bar: #3f78b5;
+    --flame-text: #f2f4f6;
+  }
+}

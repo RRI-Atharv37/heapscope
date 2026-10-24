@@ -1,6 +1,7 @@
 pub mod analyze;
 pub mod attach;
 pub mod diff;
+pub mod report;
 pub mod run;
 
 use std::path::{Path, PathBuf};

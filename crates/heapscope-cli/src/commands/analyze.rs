@@ -5,7 +5,7 @@
 //! gate read.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use heapscope_analysis::json::{self, site_location};
@@ -22,23 +22,39 @@ pub struct AnalyzeArgs {
     pub suppressions: Option<PathBuf>,
     pub no_builtin_suppressions: bool,
     pub limit: usize,
+    /// Also write the interactive HTML report here.
+    pub html: Option<PathBuf>,
 }
 
-pub fn run(args: AnalyzeArgs) -> Result<ExitCode, String> {
-    let trace = Trace::open(&args.trace)
-        .map_err(|e| format!("cannot read trace {}: {e}", args.trace.display()))?;
+/// Read and analyse a trace and detect its leak candidates.
+pub fn load(
+    path: &Path,
+    suppressions: Option<&Path>,
+    no_builtin_suppressions: bool,
+) -> Result<(Analysis, LeakReport), String> {
+    let trace =
+        Trace::open(path).map_err(|e| format!("cannot read trace {}: {e}", path.display()))?;
     let mut symbols = Symbolizer::new(trace.modules.clone(), SymOptions::standard());
     let analysis = analyze(&trace, &mut symbols, &Options::default());
 
-    let mut rules = if args.no_builtin_suppressions {
+    let mut rules = if no_builtin_suppressions {
         Suppressions::none()
     } else {
         Suppressions::builtin()
     };
-    if let Some(path) = &args.suppressions {
+    if let Some(path) = suppressions {
         rules.extend(Suppressions::load(path)?);
     }
     let report = leaks::detect(&analysis, &rules);
+    Ok((analysis, report))
+}
+
+pub fn run(args: AnalyzeArgs) -> Result<ExitCode, String> {
+    let (analysis, report) = load(
+        &args.trace,
+        args.suppressions.as_deref(),
+        args.no_builtin_suppressions,
+    )?;
 
     let to_stdout = args.output.as_deref().is_some_and(|p| p.as_os_str() == "-");
     if let Some(path) = &args.output {
@@ -51,6 +67,9 @@ pub fn run(args: AnalyzeArgs) -> Result<ExitCode, String> {
             std::fs::write(path, text)
                 .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         }
+    }
+    if let Some(path) = &args.html {
+        super::report::write(&analysis, &report, path)?;
     }
     // The console report would corrupt JSON on stdout, so warnings go to stderr in that case.
     if to_stdout {

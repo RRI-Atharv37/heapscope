@@ -1,5 +1,5 @@
 //! `heapscope` command-line entry point. `run` and `attach` capture; `diff` compares live memory;
-//! `analyze` summarises a trace.
+//! `analyze` summarises a trace and `report` writes the HTML report.
 
 mod commands;
 mod launch;
@@ -83,6 +83,23 @@ enum Command {
         /// Rows to list in each section (0 for all)
         #[arg(long, default_value_t = 10)]
         limit: usize,
+        /// Also write the interactive HTML report here
+        #[arg(long, value_name = "FILE")]
+        html: Option<PathBuf>,
+    },
+    /// Write a self-contained HTML report (summary, call tree, flame graph) for a trace
+    Report {
+        /// Trace file to read
+        trace: PathBuf,
+        /// HTML file to write
+        #[arg(short, long, value_name = "FILE", default_value = "report.html")]
+        output: PathBuf,
+        /// File of extra suppression rules (fn:, module:, file: lines)
+        #[arg(long, value_name = "FILE")]
+        suppressions: Option<PathBuf>,
+        /// Do not apply the built-in suppressions for start-up and loader allocations
+        #[arg(long)]
+        no_builtin_suppressions: bool,
     },
     /// Compare the live memory of two trace files, or of two markers in one trace
     Diff {
@@ -138,12 +155,25 @@ fn main() -> ExitCode {
             suppressions,
             no_builtin_suppressions,
             limit,
+            html,
         } => commands::analyze::run(commands::analyze::AnalyzeArgs {
             trace,
             output,
             suppressions,
             no_builtin_suppressions,
             limit,
+            html,
+        }),
+        Command::Report {
+            trace,
+            output,
+            suppressions,
+            no_builtin_suppressions,
+        } => commands::report::run(commands::report::ReportArgs {
+            trace,
+            output,
+            suppressions,
+            no_builtin_suppressions,
         }),
         Command::Diff {
             before,

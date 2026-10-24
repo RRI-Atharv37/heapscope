@@ -315,3 +315,11 @@ fn attached_capture_is_net_growth_and_not_exact() {
     );
     assert!(!j.get("warnings").unwrap().as_array().unwrap().is_empty());
 }
+
+#[test]
+fn compact_json_has_no_whitespace_and_parses_back() {
+    let summary = summary_of(CaptureMode::Full, false);
+    let compact = summary.to_compact();
+    assert!(!compact.contains('\n') && !compact.contains(": "));
+    assert_eq!(Json::parse(&compact).unwrap(), summary);
+}

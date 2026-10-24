@@ -1,0 +1,15 @@
+[package]
+name = "heapscope-report"
+description = "HeapScope report: a self-contained HTML page with the summary, call tree and flame graph of a trace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+heapscope-analysis = { path = "../heapscope-analysis" }
+
+[lints]
+workspace = true

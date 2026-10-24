@@ -189,3 +189,102 @@ fn analyze_prints_a_report_and_writes_the_json_summary() {
     assert_eq!(bad.status.code(), Some(1));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The data element of a report page.
+fn embedded_data(page: &str) -> heapscope_analysis::json::Json {
+    let open = r#"<script id="hs-data" type="application/json">"#;
+    let start = page.find(open).expect("data element") + open.len();
+    let end = start
+        + page[start..]
+            .find("</script>")
+            .expect("end of data element");
+    heapscope_analysis::json::Json::parse(&page[start..end]).expect("embedded data is JSON")
+}
+
+#[test]
+fn report_writes_a_self_contained_page_with_the_call_tree() {
+    use heapscope_analysis::json::Json;
+
+    let dir = std::env::temp_dir().join(format!("heapscope-cli-report-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let t = dir.join("r.hstrace");
+    write_trace(
+        &t,
+        &[(15, "start")],
+        &[(10, 0x100, 64), (20, 0x200, 128), (30, 0x300, 5000)],
+    );
+
+    let page_path = dir.join("r.html");
+    let out = heapscope()
+        .arg("report")
+        .arg(&t)
+        .arg("-o")
+        .arg(&page_path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let page = std::fs::read_to_string(&page_path).unwrap();
+    assert!(page.starts_with("<!doctype html>"));
+    // Offline: nothing is fetched from anywhere.
+    assert!(!page.contains("src=\"http") && !page.contains("href=\"http"));
+
+    let data = embedded_data(&page);
+    assert_eq!(data.get("report_version").and_then(Json::as_u64), Some(1));
+    let summary = data.get("summary").unwrap();
+    assert_eq!(
+        summary.get("schema_version").and_then(Json::as_u64),
+        Some(1)
+    );
+    let tree = data.get("tree").unwrap();
+    let nodes = tree.get("parent").and_then(Json::as_array).unwrap().len();
+    assert!(nodes > 1);
+    for column in [
+        "frame",
+        "allocs",
+        "alloc_bytes",
+        "live_allocs",
+        "live_bytes",
+        "peak_bytes",
+    ] {
+        assert_eq!(
+            tree.get(column).and_then(Json::as_array).map(<[Json]>::len),
+            Some(nodes),
+            "{column}"
+        );
+    }
+    let total: u64 = tree
+        .get("alloc_bytes")
+        .and_then(Json::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(Json::as_u64)
+        .sum();
+    assert_eq!(total, 5192);
+
+    // `analyze --html` writes the same page and keeps the console report.
+    let both = dir.join("a.html");
+    let out = heapscope()
+        .arg("analyze")
+        .arg(&t)
+        .arg("--html")
+        .arg(&both)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Totals"));
+    assert!(embedded_data(&std::fs::read_to_string(&both).unwrap())
+        .get("tree")
+        .is_some());
+
+    let missing = heapscope()
+        .arg("report")
+        .arg(dir.join("none.hstrace"))
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(1));
+    std::fs::remove_dir_all(&dir).ok();
+}

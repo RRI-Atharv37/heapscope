@@ -1,0 +1,15 @@
+{
+  "name": "heapscope-report",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Front end of the HeapScope HTML report. Dev dependencies only; the output is one HTML file.",
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsc --noEmit && node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "typescript": "5.9.2"
+  }
+}

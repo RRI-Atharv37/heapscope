@@ -40,6 +40,18 @@ candidates**: allocations still live when the program ended, grouped by call pat
 evidence, not proof; see the [report guide](report-guide.md) for what it means and how to silence
 memory that is meant to live until exit (`--suppressions rules.txt`).
 
+## Open it in a browser
+
+```bash
+heapscope report leak.hstrace -o report.html
+```
+
+`report.html` is one file that opens offline in any browser (`analyze --html report.html` writes it
+alongside the console report). The Summary tab has the headline numbers, top call paths and leak
+candidates; Call tree lets you expand, sort and search every call path; Flame graph shows the same
+tree as boxes you can click to zoom into. A banner above every tab says when the numbers are
+estimates or lower bounds (sampled, attached late, short-lived allocations folded, events lost).
+
 ## 4. Compare two runs
 
 ```bash

@@ -182,6 +182,7 @@ dependencies = [
  "embed-resource",
  "heapscope-analysis",
  "heapscope-control",
+ "heapscope-report",
  "heapscope-symbols",
  "heapscope-trace",
  "windows-sys",
@@ -190,6 +191,13 @@ dependencies = [
 [[package]]
 name = "heapscope-control"
 version = "0.1.0"
+
+[[package]]
+name = "heapscope-report"
+version = "0.1.0"
+dependencies = [
+ "heapscope-analysis",
+]
 
 [[package]]
 name = "heapscope-symbols"

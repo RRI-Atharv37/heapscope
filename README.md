@@ -4,8 +4,9 @@ A heap profiler for native Windows programs: record allocations, find leaks, dif
 (in the paid tier) gate memory regressions in CI.
 
 **Status:** pre-alpha. `heapscope run` and `heapscope attach` record allocations into a trace file
-([format](docs/trace-format.md), [options](docs/capture-options.md)); `analyze`, `diff` and the report are
-not implemented yet.
+([format](docs/trace-format.md), [options](docs/capture-options.md)); `analyze`, `diff` and
+`report` read it (a self-contained HTML page with the summary, call tree and flame graph). The
+timeline, the diff view and the CI gate are not implemented yet.
 
 ## Build
 
