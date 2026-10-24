@@ -156,6 +156,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "heapscope-analysis"
+version = "0.1.0"
+dependencies = [
+ "heapscope-symbols",
+ "heapscope-trace",
+]
+
+[[package]]
 name = "heapscope-capture"
 version = "0.1.0"
 dependencies = [
@@ -180,6 +188,14 @@ dependencies = [
 [[package]]
 name = "heapscope-control"
 version = "0.1.0"
+
+[[package]]
+name = "heapscope-symbols"
+version = "0.1.0"
+dependencies = [
+ "heapscope-trace",
+ "windows-sys",
+]
 
 [[package]]
 name = "heapscope-trace"

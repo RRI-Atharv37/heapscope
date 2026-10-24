@@ -16,7 +16,7 @@ use windows_sys::Win32::System::Threading::SwitchToThread;
 
 use crate::sampling::{self, ChurnSlot, Pend};
 
-pub const RING_WORDS: usize = 1 << 16; // 512 KiB per thread
+pub const RING_WORDS: usize = 1 << 18; // 2 MiB per thread
 const RING_MASK: usize = RING_WORDS - 1;
 pub const MAX_THREADS: usize = 4096;
 pub const STACK_CACHE: usize = 2048;
@@ -94,6 +94,9 @@ impl ThreadBuf {
             let now = crate::clock::now_ns();
             if waited_since == 0 {
                 waited_since = now.max(1);
+                // The flusher sleeps while rings have room; wake it instead of idling until its
+                // next timer tick (~15 ms), which used to cap throughput at ring-size per tick.
+                crate::flusher::wake();
             } else if now - waited_since > FULL_RING_PATIENCE_NS {
                 self.dropped_overflow
                     .store(self.dropped_overflow.load(Relaxed) + 1, Relaxed);

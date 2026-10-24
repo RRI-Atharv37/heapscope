@@ -19,7 +19,9 @@ use heapscope_trace::{
 };
 use windows_sys::Win32::System::Environment::GetCommandLineW;
 use windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW;
-use windows_sys::Win32::System::Threading::{GetCurrentProcessId, Sleep};
+use windows_sys::Win32::System::Threading::{
+    CreateEventW, GetCurrentProcessId, SetEvent, Sleep, WaitForSingleObject,
+};
 
 use crate::buffer::{self, ThreadBuf, R_ALLOC, R_CHURN, R_FREE, R_MARKER, R_REALLOC, R_STACK};
 use crate::control::Config;
@@ -27,6 +29,18 @@ use crate::{clock, control, modules, sampling, STATE, STATE_OFF, STATE_STOPPING}
 
 const BATCH_LIMIT: usize = 32 * 1024;
 const IDLE_SLEEP_MS: u32 = 5;
+/// Auto-reset event the flush thread waits on when idle; producers set it when a ring is full.
+static WAKE: core::sync::atomic::AtomicIsize = core::sync::atomic::AtomicIsize::new(0);
+
+/// Wake the flush thread now.
+pub fn wake() {
+    let h = WAKE.load(Relaxed);
+    if h != 0 {
+        // SAFETY: the handle is created once, before capture starts, and never closed.
+        unsafe { SetEvent(h as *mut core::ffi::c_void) };
+    }
+}
+
 const STOP_WAIT: Duration = Duration::from_secs(2);
 const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -82,6 +96,11 @@ fn build_header(cfg: &Config) -> Header {
 
 /// Create the trace file and install the sink. Returns a `heapscope_control::error` code on failure.
 pub fn open(cfg: &Config) -> Result<(), u32> {
+    if WAKE.load(Relaxed) == 0 {
+        // SAFETY: plain Win32 call; a null result just leaves the timed sleep in place.
+        let h = unsafe { CreateEventW(core::ptr::null(), 0, 0, core::ptr::null()) };
+        WAKE.store(h as isize, Relaxed);
+    }
     let path = std::ffi::OsString::from_wide(&cfg.out);
     let file = File::create(&path).map_err(|_| error::OPEN_OUTPUT)?;
     let writer = TraceWriter::new(BufWriter::with_capacity(1 << 20, file), &build_header(cfg))
@@ -332,7 +351,14 @@ pub fn run() {
         }
         if seen == 0 {
             // SAFETY: plain Win32 call.
-            unsafe { Sleep(IDLE_SLEEP_MS) };
+            unsafe {
+                match WAKE.load(Relaxed) {
+                    0 => Sleep(IDLE_SLEEP_MS),
+                    h => {
+                        WaitForSingleObject(h as *mut core::ffi::c_void, IDLE_SLEEP_MS);
+                    }
+                }
+            }
         }
     }
 }

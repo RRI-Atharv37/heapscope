@@ -1,0 +1,16 @@
+[package]
+name = "heapscope-analysis"
+description = "HeapScope analysis: call tree, per-path totals, peak, churn and filters over a trace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+heapscope-trace = { path = "../heapscope-trace" }
+heapscope-symbols = { path = "../heapscope-symbols" }
+
+[lints]
+workspace = true

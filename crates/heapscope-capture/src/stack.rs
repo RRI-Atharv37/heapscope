@@ -15,7 +15,7 @@ use crate::buffer::{header, ThreadBuf, R_STACK, STACK_CACHE};
 pub const MAX_DEPTH: usize = 64;
 pub const DEFAULT_DEPTH: u32 = 32;
 /// Frames above the hook that belong to us and the unwinder; captured so they can be dropped.
-const OWN_FRAME_SLACK: usize = 10;
+const OWN_FRAME_SLACK: usize = 5;
 
 static DEPTH: AtomicU32 = AtomicU32::new(DEFAULT_DEPTH);
 static OWN_LO: AtomicUsize = AtomicUsize::new(0);
