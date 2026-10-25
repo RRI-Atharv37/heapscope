@@ -141,4 +141,5 @@ verified on the build machine with a public key built into `heapscope-ci`; nothi
 | exit 3 | the secret is missing or empty (forks, or Azure's explicit mapping), or the key expired |
 | exit 4 `scenario failed` | your program returned non-zero under HeapScope; run it by hand with `heapscope run` |
 | every function shows as `module+0x...` | no `.pdb` next to the exe in CI |
+| a clean build fails `leak_bytes` by a few KB on CI | the runner's C runtime allocates a little more at startup than your PC; use a limit of 16 KB or more, or make the baseline from a CI run |
 | peak differs by a lot between runs | the scenario is not deterministic (threads, timers, input); make it so, or raise `--repeat` |

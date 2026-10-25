@@ -40,7 +40,7 @@ env:
   BASELINE_DIR: examples/ci-demo/heapscope-baselines       # where <SCENARIO>.hsbaseline.json is committed
   APP: build/RelWithDebInfo/ci-demo.exe                      # your program, built by the Build step below
   APP_ARGS: ""                            # the demo takes none
-  FAIL_ON: "--fail-on peak:+10% --fail-on leak_bytes:+4KB --fail-on leaks:+10"
+  FAIL_ON: "--fail-on peak:+10% --fail-on leak_bytes:+16KB --fail-on leaks:+10"
   REPEAT: "3"                             # runs per gate; the median is compared
   BUILD_FLAVOUR: release                  # release (/MD, /MT) or debug (/MDd, /MTd) CRT
   COMMENT: "true"                         # post the verdict as a PR comment

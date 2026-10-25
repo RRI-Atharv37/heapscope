@@ -22,7 +22,7 @@ cmake --build build\clean
 cmake -S . -B build\regressed -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DDEMO_REGRESSION=ON
 cmake --build build\regressed
 
-set RULES=--fail-on peak:+10% --fail-on leak_bytes:+4KB --fail-on leaks:+10
+set RULES=--fail-on peak:+10% --fail-on leak_bytes:+16KB --fail-on leaks:+10
 heapscope-ci gate --scenario startup --build-flavour release --run --repeat 3 %RULES% -- build\clean\ci-demo.exe
 heapscope-ci gate --scenario startup --build-flavour release --run --repeat 3 %RULES% -- build\regressed\ci-demo.exe
 ```
