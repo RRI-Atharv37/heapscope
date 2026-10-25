@@ -1,6 +1,5 @@
 name: ci
 
-# Private repo: Windows runners cost double minutes, so only PRs and main.
 on:
   push:
     branches: [main]

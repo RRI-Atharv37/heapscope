@@ -1,0 +1,92 @@
+# HeapScope memory gate for Azure Pipelines. Copy to azure-pipelines.yml or include it from yours.
+# Setup guide: docs/ci-gate.md
+#
+# Same steps as the GitHub Actions template: download and verify `heapscope` and `heapscope-ci`,
+# build your program, gate the median of a few runs against heapscope-baselines/, publish the HTML
+# report. The verdict appears on the run's Extensions tab (##vso[task.uploadsummary]).
+#
+# You need: a Windows x64 program built with debug info, a committed baseline, and a SECRET
+# pipeline variable named HEAPSCOPE_LICENSE (Pipelines > Edit > Variables, tick "Keep this value
+# secret"). Secret variables are not passed to scripts automatically; this template maps it into
+# the gate step's env.
+trigger: none
+pr:
+  branches:
+    include: [main]
+
+pool:
+  vmImage: windows-latest
+
+variables:
+  # ---- Fill these in. The links and checksums come with the zip files you were sent. ----
+  heapscopeUrl: https://example.invalid/heapscope-0.1.0-beta.zip
+  heapscopeSha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  gateUrl: https://example.invalid/heapscope-ci-0.1.0-beta.zip
+  gateSha256: "0000000000000000000000000000000000000000000000000000000000000000"
+
+  # ---- The scenario ----
+  scenario: startup                     # also the baseline file name
+  app: build/RelWithDebInfo/app.exe     # your program, built by the Build step below
+  appArgs: "--scenario startup"         # arguments for it, split on spaces
+  failOn: "--fail-on peak:+5% --fail-on leak_bytes:+64KB --fail-on leaks:+10"
+  repeat: "3"                           # runs per gate; the median is compared
+  buildFlavour: release                 # release (/MD, /MT) or debug (/MDd, /MTd) CRT
+
+steps:
+  - checkout: self
+
+  - pwsh: |
+      function Get-Verified($url, $sha256, $dir) {
+        $zip = Join-Path $env:AGENT_TEMPDIRECTORY ([IO.Path]::GetFileName(([uri]$url).AbsolutePath))
+        Invoke-WebRequest -Uri $url -OutFile $zip
+        $actual = (Get-FileHash $zip -Algorithm SHA256).Hash
+        if ($actual -ne $sha256.ToUpper()) { throw "$url : SHA-256 is $actual, expected $sha256" }
+        Expand-Archive $zip -DestinationPath $dir
+      }
+      Get-Verified '$(heapscopeUrl)' '$(heapscopeSha256)' "$env:AGENT_TEMPDIRECTORY\heapscope"
+      Get-Verified '$(gateUrl)' '$(gateSha256)' "$env:AGENT_TEMPDIRECTORY\heapscope-ci"
+      # heapscope_capture.dll must stay next to heapscope.exe.
+      $hs = Get-ChildItem "$env:AGENT_TEMPDIRECTORY\heapscope" -Recurse -Filter heapscope.exe | Select-Object -First 1
+      $gate = Get-ChildItem "$env:AGENT_TEMPDIRECTORY\heapscope-ci" -Recurse -Filter heapscope-ci.exe | Select-Object -First 1
+      if (-not $hs -or -not $gate) { throw 'heapscope.exe or heapscope-ci.exe is not in the zip' }
+      Write-Host "##vso[task.setvariable variable=HEAPSCOPE_EXE]$($hs.FullName)"
+      Write-Host "##vso[task.prependpath]$($gate.DirectoryName)"
+    displayName: Install HeapScope (download and verify)
+
+  # ---- Replace with your own build. Keep the PDB next to the exe so the report has names. ----
+  - pwsh: |
+      cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+      cmake --build build --config RelWithDebInfo
+    displayName: Build
+
+  - pwsh: |
+      $rules = '$(failOn)' -split '\s+' | Where-Object { $_ }
+      $appArgs = '$(appArgs)' -split '\s+' | Where-Object { $_ }
+      heapscope-ci gate --scenario '$(scenario)' --run --repeat '$(repeat)' `
+        --build-flavour '$(buildFlavour)' @rules --markdown verdict.md -- '$(app)' @appArgs
+      # Keep the exit code for the last step so the report is still published.
+      Write-Host "##vso[task.setvariable variable=GATE_EXIT]$LASTEXITCODE"
+      exit 0
+    displayName: Gate
+    env:
+      HEAPSCOPE_LICENSE: $(HEAPSCOPE_LICENSE)   # secret variables must be mapped explicitly
+
+  - pwsh: |
+      $appArgs = '$(appArgs)' -split '\s+' | Where-Object { $_ }
+      & $env:HEAPSCOPE_EXE run -o '$(scenario).hstrace' -- '$(app)' @appArgs
+      & $env:HEAPSCOPE_EXE report '$(scenario).hstrace' -o '$(scenario)-report.html'
+    displayName: HTML report
+    condition: succeededOrFailed()
+    continueOnError: true
+
+  - publish: $(Build.SourcesDirectory)/$(scenario)-report.html
+    artifact: heapscope-report
+    displayName: Publish the HTML report
+    condition: succeededOrFailed()
+    continueOnError: true
+
+  - pwsh: |
+      Write-Host "heapscope-ci exited with $env:GATE_EXIT (1 regression, 2 usage, 3 licence, 4 input not accepted)"
+      exit [int]$env:GATE_EXIT
+    displayName: Fail on regression
+    condition: and(succeeded(), ne(variables['GATE_EXIT'], '0'))

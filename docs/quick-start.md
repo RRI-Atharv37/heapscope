@@ -1,11 +1,16 @@
-# Quick start (draft)
+# Quick start
 
 HeapScope records every heap allocation a Windows program makes, then tells you where the memory
 went and what was never freed. It works on 64-bit programs, with no source changes.
 
-## 1. Build
+## 1. Install
 
-You need Rust, the Visual Studio Build Tools with the Windows SDK, and CMake for the samples.
+Unpack `heapscope-0.1.0-beta.zip` and put the folder on `PATH`; `heapscope.exe` and
+`heapscope_capture.dll` must stay together. Windows 11 Smart App Control may block the unsigned
+binaries; see [capture options](capture-options.md#attach) for what that looks like.
+
+To build from source instead, you need Rust, the Visual Studio Build Tools with the Windows SDK,
+and CMake for the samples:
 
 ```bash
 cargo build --release
@@ -13,7 +18,7 @@ cmake -S samples -B build/samples
 cmake --build build/samples --config RelWithDebInfo
 ```
 
-The tool is `target\release\heapscope.exe`.
+The tool is then `target\release\heapscope.exe`. The examples below use the sample `leak.exe`.
 
 ## 2. Record a run
 
@@ -66,3 +71,9 @@ heapscope analyze leak.hstrace -o summary.json
 ```
 
 writes a versioned JSON summary, described in [json-schema.md](json-schema.md).
+
+## 6. Fail a build on a regression (paid tier)
+
+`heapscope-ci` compares a run with a baseline stored in your repository and fails CI when peak
+memory or leaks grew. Templates for GitHub Actions and Azure Pipelines, rules and exit codes are
+in [ci-gate.md](ci-gate.md).

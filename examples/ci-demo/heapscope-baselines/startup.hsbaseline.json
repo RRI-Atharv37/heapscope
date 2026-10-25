@@ -1,0 +1,117 @@
+{
+  "format_version": 1,
+  "scenario": "startup",
+  "heapscope_version": "heapscope 0.1.0",
+  "build_flavour": "release",
+  "metrics": {
+    "peak": 830625,
+    "leaks": 25,
+    "leak_bytes": 21327,
+    "allocs": 311,
+    "bytes": 920858
+  },
+  "top_stacks": [
+    {
+      "id": "ci-demo.exe!build_cache <- ci-demo.exe!main <- ci-demo.exe!__scrt_common_main_seh <- kernel32.dll!BaseThreadInitThunk <- ntdll.dll!RtlUserThreadStart",
+      "function": "build_cache",
+      "allocs": 200,
+      "alloc_bytes": 819200,
+      "peak_live_bytes": 819200
+    },
+    {
+      "id": "ucrtbase.dll!calloc_base <- ucrtbase.dll!towlower_l <- ucrtbase.dll!set_errno <- ucrtbase.dll!towlower_l <- ntdll.dll!RtlWow64SuspendThread <- ntdll.dll!RtlRaiseException <- ntdll.dll!RtlRaiseException <- ntdll.dll!EtwEventWriteNoRegistration <- ntdll.dll!EtwEventWriteNoRegistration <- ntdll.dll!LdrInitializeThunk",
+      "function": "calloc_base",
+      "allocs": 2,
+      "alloc_bytes": 3872,
+      "peak_live_bytes": 3872
+    },
+    {
+      "id": "heapscope_capture.dll!__acrt_getptd_noexit <- heapscope_capture.dll!__acrt_thread_attach <- heapscope_capture.dll!__scrt_dllmain_crt_thread_attach <- heapscope_capture.dll!dllmain_crt_dispatch <- heapscope_capture.dll!dllmain_dispatch <- ntdll.dll!RtlWow64SuspendThread <- ntdll.dll!RtlRaiseException <- ntdll.dll!RtlRaiseException <- ntdll.dll!EtwEventWriteNoRegistration <- ntdll.dll!EtwEventWriteNoRegistration <- ntdll.dll!LdrInitializeThunk",
+      "function": "__acrt_getptd_noexit",
+      "allocs": 2,
+      "alloc_bytes": 1936,
+      "peak_live_bytes": 1936
+    },
+    {
+      "id": "ci-demo.exe!main <- ci-demo.exe!__scrt_common_main_seh <- kernel32.dll!BaseThreadInitThunk <- ntdll.dll!RtlUserThreadStart",
+      "function": "main",
+      "allocs": 1,
+      "alloc_bytes": 1600,
+      "peak_live_bytes": 1600
+    },
+    {
+      "id": "ci-demo.exe!pre_cpp_initialization <- ucrtbase.dll!initterm <- ci-demo.exe!__scrt_common_main_seh <- kernel32.dll!BaseThreadInitThunk <- ntdll.dll!RtlUserThreadStart",
+      "function": "pre_cpp_initialization",
+      "allocs": 1,
+      "alloc_bytes": 1136,
+      "peak_live_bytes": 1136
+    },
+    {
+      "id": "ci-demo.exe!handle_request <- ci-demo.exe!main <- ci-demo.exe!__scrt_common_main_seh <- kernel32.dll!BaseThreadInitThunk <- ntdll.dll!RtlUserThreadStart",
+      "function": "handle_request",
+      "allocs": 50,
+      "alloc_bytes": 51200,
+      "peak_live_bytes": 1024
+    },
+    {
+      "id": "ntdll.dll!RtlFlsSetValue <- kernelbase.dll!FlsSetValue <- ucrtbase.dll!towlower_l <- ucrtbase.dll!set_errno <- ucrtbase.dll!towlower_l <- ntdll.dll!RtlWow64SuspendThread <- ntdll.dll!RtlRaiseException <- ntdll.dll!RtlRaiseException <- ntdll.dll!EtwEventWriteNoRegistration <- ntdll.dll!EtwEventWriteNoRegistration <- ntdll.dll!LdrInitializeThunk",
+      "function": "RtlFlsSetValue",
+      "allocs": 4,
+      "alloc_bytes": 448,
+      "peak_live_bytes": 448
+    },
+    {
+      "id": "ntdll.dll!RtlRaiseException <- ntdll.dll!RtlRaiseException <- ntdll.dll!EtwEventWriteNoRegistration <- ntdll.dll!EtwEventWriteNoRegistration <- ntdll.dll!LdrInitializeThunk",
+      "function": "RtlRaiseException",
+      "allocs": 4,
+      "alloc_bytes": 400,
+      "peak_live_bytes": 400
+    },
+    {
+      "id": "ci-demo.exe!atexit <- ci-demo.exe!pre_c_initialization <- ucrtbase.dll!initterm_e <- ci-demo.exe!__scrt_common_main_seh <- kernel32.dll!BaseThreadInitThunk <- ntdll.dll!RtlUserThreadStart",
+      "function": "atexit",
+      "allocs": 1,
+      "alloc_bytes": 256,
+      "peak_live_bytes": 256
+    },
+    {
+      "id": "heapscope_capture.dll!__vcrt_thread_attach <- heapscope_capture.dll!__scrt_dllmain_crt_thread_attach <- heapscope_capture.dll!dllmain_crt_dispatch <- heapscope_capture.dll!dllmain_dispatch <- ntdll.dll!RtlWow64SuspendThread <- ntdll.dll!RtlRaiseException <- ntdll.dll!RtlRaiseException <- ntdll.dll!EtwEventWriteNoRegistration <- ntdll.dll!EtwEventWriteNoRegistration <- ntdll.dll!LdrInitializeThunk",
+      "function": "__vcrt_thread_attach",
+      "allocs": 2,
+      "alloc_bytes": 256,
+      "peak_live_bytes": 256
+    }
+  ],
+  "top_leaks": [
+    {
+      "id": "ci-demo.exe!__scrt_common_main_seh <- kernel32.dll!BaseThreadInitThunk <- ntdll.dll!RtlUserThreadStart",
+      "allocs": 19,
+      "bytes": 15902
+    },
+    {
+      "id": "ci-demo.exe!printf <- ci-demo.exe!main <- ci-demo.exe!__scrt_common_main_seh <- kernel32.dll!BaseThreadInitThunk <- ntdll.dll!RtlUserThreadStart",
+      "allocs": 1,
+      "bytes": 4096
+    },
+    {
+      "id": "ci-demo.exe!pre_cpp_initialization <- ucrtbase.dll!initterm <- ci-demo.exe!__scrt_common_main_seh <- kernel32.dll!BaseThreadInitThunk <- ntdll.dll!RtlUserThreadStart",
+      "allocs": 1,
+      "bytes": 1136
+    },
+    {
+      "id": "ci-demo.exe!pre_c_initialization <- ucrtbase.dll!initterm_e <- ci-demo.exe!__scrt_common_main_seh <- kernel32.dll!BaseThreadInitThunk <- ntdll.dll!RtlUserThreadStart",
+      "allocs": 1,
+      "bytes": 73
+    },
+    {
+      "id": "ntdll.dll!LdrControlFlowGuardEnforced <- ntdll.dll!LdrResolveDelayLoadedAPI <- ntdll.dll!AlpcGetMessageFromCompletionList <- ntdll.dll!RtlReleaseSRWLockExclusive <- ntdll.dll!RtlLocateExtendedFeature2 <- ntdll.dll!TpCallbackMayRunLong <- ntdll.dll!TpCallbackMayRunLong <- kernel32.dll!BaseThreadInitThunk <- ntdll.dll!RtlUserThreadStart",
+      "allocs": 1,
+      "bytes": 72
+    },
+    {
+      "id": "ntdll.dll!LdrResolveDelayLoadedAPI <- ntdll.dll!AlpcGetMessageFromCompletionList <- ntdll.dll!RtlReleaseSRWLockExclusive <- ntdll.dll!RtlLocateExtendedFeature2 <- ntdll.dll!TpCallbackMayRunLong <- ntdll.dll!TpCallbackMayRunLong <- kernel32.dll!BaseThreadInitThunk <- ntdll.dll!RtlUserThreadStart",
+      "allocs": 2,
+      "bytes": 48
+    }
+  ]
+}
