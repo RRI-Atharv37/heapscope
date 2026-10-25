@@ -1,4 +1,4 @@
-# Reading leak and diff reports (draft)
+# Reading leak, diff and HTML reports (draft)
 
 This explains what HeapScope's leak candidates and snapshot diffs mean, and how to silence the
 ones you know are fine. `heapscope analyze` prints the leak report (`--suppressions FILE` adds your own rules,
@@ -102,3 +102,39 @@ Things to know when reading a diff:
 - Attached and sampled traces keep their caveats (see above); the diff prints a note for each.
   Sampled sides are scaled to estimates, and two traces sampled at different rates are flagged.
 - `--min-change BYTES` hides small differences; `--all` also lists unchanged sites.
+
+## The HTML report
+
+`heapscope report trace.hstrace -o report.html` (or `analyze --html`) writes one offline page with
+these tabs: Summary, Call tree, Flame graph, Timeline and Diff. The capture-mode banner (attached,
+sampled, filtered, events lost) stays above every tab.
+
+### Timeline
+
+![Timeline of a capture, with the live set at the peak listed below](images/report-timeline.png)
+
+*The markers in this screenshot were added by hand for illustration.*
+
+The chart shows live memory over time (switch to live allocations with **Show**). Dashed lines are
+markers set by the program, the diamond is the peak and the dot is the end of the trace.
+
+The report keeps the live set only at those moments, so click a marker, the peak or the end (or
+pick it from the list under the chart) to see which allocation sites held the memory then. Clicking
+empty space only shows the figures for that point in the tooltip. **Open diff** compares the
+selected moment with another one.
+
+### Diff tab
+
+![Delta tree between two markers](images/report-diff.png)
+
+The Diff tab compares the live set at two moments of the capture. The delta tree shows the call
+paths down to the sites that changed, with live memory before, after and the change. The filters
+(**Grew**, **New**, **Shrank**, **Gone**, **Unchanged**) apply to allocation sites, the nodes that
+hold memory themselves; a parent row stays visible when something below it matches, and its
+numbers include everything below it. A red `+` change is more memory, a green `−` less (the sign
+is always in the text). **Show** switches between live bytes and live allocations.
+
+To compare two runs, write a diff report: `heapscope diff before.hstrace after.hstrace --html
+diff.html`, or `heapscope diff trace.hstrace --markers start stop --html diff.html`. It has a
+Summary tab (totals and the changed sites, as `heapscope diff` prints them) and the same delta
+tree. The two call trees are merged on module and function names, so they match across builds.

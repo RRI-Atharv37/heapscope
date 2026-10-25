@@ -465,13 +465,9 @@ fn leak_entry(a: &Analysis, e: &LeakEntry) -> Json {
     with(site_fields(a, e.node), more)
 }
 
-/// Build the version 1 summary of `analysis` and its `leaks` report.
-pub fn summary(a: &Analysis, leaks: &LeakReport) -> Json {
-    let scale = a.scale();
-    let c = &a.capture;
-    let t = &a.totals;
-
-    let capture = obj(vec![
+/// The `capture` object of the summary: how the trace was recorded.
+pub fn capture(c: &crate::model::CaptureInfo) -> Json {
+    obj(vec![
         ("mode", s(c.mode())),
         ("sample_rate", Json::Uint(u64::from(c.sample_rate))),
         ("min_lifetime_ms", Json::Uint(u64::from(c.min_lifetime_ms))),
@@ -490,7 +486,16 @@ pub fn summary(a: &Analysis, leaks: &LeakReport) -> Json {
                 ("sampling", Json::Uint(c.dropped_sampling)),
             ]),
         ),
-    ]);
+    ])
+}
+
+/// Build the version 1 summary of `analysis` and its `leaks` report.
+pub fn summary(a: &Analysis, leaks: &LeakReport) -> Json {
+    let scale = a.scale();
+    let c = &a.capture;
+    let t = &a.totals;
+
+    let capture = capture(c);
 
     let totals = obj(vec![
         ("allocs", Json::Uint(t.allocs * scale)),

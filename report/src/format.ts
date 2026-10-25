@@ -28,3 +28,10 @@ export function duration(ns: number): string {
   if (ns < 1e9) return `${(ns / 1e6).toFixed(1)} ms`;
   return `${(ns / 1e9).toFixed(2)} s`;
 }
+
+/** "+1.2 KiB", "-3 B" or "0 B": the sign is part of the text, so colour is never the only cue. */
+export function signed(n: number, format: (v: number) => string): string {
+  if (n > 0) return `+${format(n)}`;
+  if (n < 0) return `−${format(-n)}`;
+  return format(0);
+}

@@ -104,26 +104,82 @@ export interface Summary {
   warnings: string[];
 }
 
-/** Columns indexed by node id; node 0 is the root and parents have lower ids than children. */
-interface TreeColumns {
-  /** [function, module, file, line] */
+/** What names the nodes: [function, module, file, line] per distinct frame, and one frame per node. */
+interface ShapeColumns {
   frames: [string, string | null, string | null, number][];
   frame: number[];
   parent: number[];
+}
+
+/** Columns indexed by node id; node 0 is the root and parents have lower ids than children. */
+interface TreeColumns extends ShapeColumns {
   allocs: number[];
   alloc_bytes: number[];
   live_allocs: number[];
   live_bytes: number[];
+  peak_allocs: number[];
   peak_bytes: number[];
 }
 
-export interface ReportData {
+/** The live set at one marker over the node ids of the tree: only nodes with live memory. */
+export interface SnapshotColumns {
+  nodes: number[];
+  allocs: number[];
+  bytes: number[];
+}
+
+export interface CaptureData {
   report_version: number;
   summary: Summary;
   tree: TreeColumns;
   /** [ts_ns, live_bytes, live_allocs] */
   timeline: [number, number, number][];
+  /** Parallel to `summary.markers`. */
+  snapshots: SnapshotColumns[];
 }
+
+export interface DiffSide {
+  label: string;
+  /** "end of trace" or "marker 'name'" */
+  at: string;
+  live_allocs: number;
+  live_bytes: number;
+  capture: CaptureInfo;
+}
+
+export type ChangeKind = "new" | "gone" | "grew" | "shrank" | "unchanged";
+
+export interface DiffEntry {
+  change: ChangeKind;
+  path: string;
+  location: string | null;
+  /** [allocs, bytes] */
+  before: [number, number];
+  after: [number, number];
+}
+
+export interface DiffInfo {
+  before: DiffSide;
+  after: DiffSide;
+  estimated: boolean;
+  notes: string[];
+  counts: { grew: number; new: number; shrank: number; gone: number };
+  entries: DiffEntry[];
+  entries_total: number;
+  tree: ShapeColumns & {
+    before_allocs: number[];
+    before_bytes: number[];
+    after_allocs: number[];
+    after_bytes: number[];
+  };
+}
+
+export interface DiffData {
+  report_version: number;
+  diff: DiffInfo;
+}
+
+export type ReportData = CaptureData | DiffData;
 
 export const SUPPORTED_VERSION = 1;
 
@@ -137,8 +193,9 @@ export function load(): { data: ReportData } | { error: string } {
   } catch {
     return { error: "This page has no data. It is the empty template; generate a report with `heapscope report`." };
   }
-  const d = parsed as Partial<ReportData> | null;
-  if (!d || typeof d !== "object" || d.report_version !== SUPPORTED_VERSION || !d.summary || !d.tree) {
+  const d = parsed as Partial<CaptureData & DiffData> | null;
+  const shaped = !!d && ((!!d.summary && !!d.tree && !!d.timeline && !!d.snapshots) || !!d.diff);
+  if (!d || typeof d !== "object" || d.report_version !== SUPPORTED_VERSION || !shaped) {
     return {
       error: `Unsupported report data (version ${String(d?.report_version)}); this page reads version ${SUPPORTED_VERSION}.`,
     };
@@ -159,39 +216,19 @@ export function metricInfo(m: Metric) {
   return METRICS.find((x) => x.id === m) ?? METRICS[0]!;
 }
 
-/** The call tree with own and inclusive figures per metric. */
-export class Tree {
+
+/** The nodes of a call tree and their names. */
+export class Shape {
   readonly size: number;
   readonly parent: Uint32Array;
   readonly children: number[][];
-  readonly own: Record<Metric, Float64Array>;
-  readonly incl: Record<Metric, Float64Array>;
-  private sorted = new Map<Metric, number[][]>();
 
-  constructor(private readonly cols: TreeColumns) {
+  constructor(private readonly cols: ShapeColumns) {
     const n = cols.parent.length;
     this.size = n;
     this.parent = Uint32Array.from(cols.parent);
     this.children = Array.from({ length: n }, () => []);
     for (let i = 1; i < n; i++) this.children[this.parent[i]!]!.push(i);
-    this.own = {
-      alloc_bytes: Float64Array.from(cols.alloc_bytes),
-      allocs: Float64Array.from(cols.allocs),
-      live_bytes: Float64Array.from(cols.live_bytes),
-      peak_bytes: Float64Array.from(cols.peak_bytes),
-    };
-    const incl = (own: Float64Array) => {
-      const out = Float64Array.from(own);
-      // Children have higher ids than their parent, so one backwards sweep totals every subtree.
-      for (let i = n - 1; i >= 1; i--) out[this.parent[i]!]! += out[i]!;
-      return out;
-    };
-    this.incl = {
-      alloc_bytes: incl(this.own.alloc_bytes),
-      allocs: incl(this.own.allocs),
-      live_bytes: incl(this.own.live_bytes),
-      peak_bytes: incl(this.own.peak_bytes),
-    };
   }
 
   name(i: number): string {
@@ -213,6 +250,51 @@ export class Tree {
     return l > 0 ? `${f}:${l}` : f;
   }
 
+  /** Root first, then down to `node`. */
+  ancestry(node: number): number[] {
+    const out: number[] = [];
+    for (let i = node; ; i = this.parent[i]!) {
+      out.push(i);
+      if (i === 0) break;
+    }
+    return out.reverse();
+  }
+}
+
+/** The call tree with own and inclusive figures per metric. */
+export class Tree extends Shape {
+  readonly own: Record<Metric, Float64Array>;
+  readonly incl: Record<Metric, Float64Array>;
+  /** Own live allocations at the end of the trace, and at the peak. */
+  readonly liveAllocs: Float64Array;
+  readonly peakAllocs: Float64Array;
+  private sorted = new Map<Metric, number[][]>();
+
+  constructor(cols: TreeColumns) {
+    super(cols);
+    const n = this.size;
+    this.own = {
+      alloc_bytes: Float64Array.from(cols.alloc_bytes),
+      allocs: Float64Array.from(cols.allocs),
+      live_bytes: Float64Array.from(cols.live_bytes),
+      peak_bytes: Float64Array.from(cols.peak_bytes),
+    };
+    this.liveAllocs = Float64Array.from(cols.live_allocs);
+    this.peakAllocs = Float64Array.from(cols.peak_allocs);
+    const incl = (own: Float64Array) => {
+      const out = Float64Array.from(own);
+      // Children have higher ids than their parent, so one backwards sweep totals every subtree.
+      for (let i = n - 1; i >= 1; i--) out[this.parent[i]!]! += out[i]!;
+      return out;
+    };
+    this.incl = {
+      alloc_bytes: incl(this.own.alloc_bytes),
+      allocs: incl(this.own.allocs),
+      live_bytes: incl(this.own.live_bytes),
+      peak_bytes: incl(this.own.peak_bytes),
+    };
+  }
+
   /** Children of every node, largest first by the inclusive figure of `metric`. */
   childrenBy(metric: Metric): number[][] {
     let s = this.sorted.get(metric);
@@ -223,14 +305,52 @@ export class Tree {
     }
     return s;
   }
+}
 
-  /** Root first, then down to `node`. */
-  ancestry(node: number): number[] {
-    const out: number[] = [];
-    for (let i = node; ; i = this.parent[i]!) {
-      out.push(i);
-      if (i === 0) break;
+/** A moment of the capture whose live set the report can show. */
+export interface Moment {
+  id: string;
+  kind: "marker" | "peak" | "end";
+  /** Short name: the marker's label, "peak" or "end of trace". */
+  label: string;
+  ts_ns: number;
+  live_bytes: number;
+  live_allocs: number;
+}
+
+/** Markers, the peak and the end of the trace, in time order (the end always last). */
+export function moments(data: CaptureData): Moment[] {
+  const s = data.summary;
+  const list: Moment[] = s.markers.map((m, i) => ({
+    id: `m${i}`,
+    kind: "marker",
+    label: m.label,
+    ts_ns: m.ts_ns,
+    live_bytes: m.live_bytes,
+    live_allocs: m.live_allocs,
+  }));
+  const peak = { live_bytes: s.peak.live_bytes, live_allocs: s.peak.live_allocs };
+  list.push({ id: "peak", kind: "peak", label: "peak", ts_ns: s.peak.ts_ns, ...peak });
+  list.sort((a, b) => a.ts_ns - b.ts_ns); // stable: markers keep their order
+  const last = data.timeline[data.timeline.length - 1];
+  const end = Math.max(last?.[0] ?? 0, ...list.map((m) => m.ts_ns));
+  const t = s.totals;
+  list.push({ id: "end", kind: "end", label: "end of trace", ts_ns: end, live_bytes: t.live_bytes, live_allocs: t.live_allocs });
+  return list;
+}
+
+/** Own live allocations and bytes per tree node at `moment`. */
+export function liveAt(data: CaptureData, tree: Tree, moment: Moment): { allocs: Float64Array; bytes: Float64Array } {
+  if (moment.kind === "peak") return { allocs: tree.peakAllocs, bytes: tree.own.peak_bytes };
+  if (moment.kind === "end") return { allocs: tree.liveAllocs, bytes: tree.own.live_bytes };
+  const snap = data.snapshots[Number(moment.id.slice(1))];
+  const allocs = new Float64Array(tree.size);
+  const bytes = new Float64Array(tree.size);
+  if (snap) {
+    for (let i = 0; i < snap.nodes.length; i++) {
+      allocs[snap.nodes[i]!] = snap.allocs[i]!;
+      bytes[snap.nodes[i]!] = snap.bytes[i]!;
     }
-    return out.reverse();
   }
+  return { allocs, bytes };
 }

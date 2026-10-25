@@ -125,8 +125,8 @@ pub fn find_marker(analysis: &Analysis, label: &str) -> Option<usize> {
     analysis.markers.iter().position(|m| m.label == label)
 }
 
-/// Live `(allocs, bytes)` per tree node at `point`.
-fn live_at(a: &Analysis, point: Point) -> Result<Vec<(NodeId, u64, u64)>, String> {
+/// Live `(node, allocs, bytes)` per tree node at `point`, unscaled.
+pub fn live_at(a: &Analysis, point: Point) -> Result<Vec<(NodeId, u64, u64)>, String> {
     match point {
         Point::End => Ok(a
             .stats

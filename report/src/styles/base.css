@@ -166,3 +166,30 @@ table.data .loc { color: var(--fg-muted); font-size: 12px; display: block; }
   .tree-head, .tree-row { grid-template-columns: minmax(0, 1fr) 90px 90px; }
   .tree-head > :nth-child(n+4), .tree-row > :nth-child(n+4) { display: none; }
 }
+
+/* ---- timeline ---- */
+.timeline-wrap canvas { cursor: default; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip { border-radius: 14px; padding: 2px 12px; }
+.chip[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent); }
+.timeline-wrap + .chips { margin-top: 10px; }
+
+/* ---- diff ---- */
+.delta-grid { grid-template-columns: minmax(0, 1fr) 100px 100px 120px 70px; }
+.head-pad { display: inline-block; padding: 6px 0; }
+.totals { margin: 12px 0 0; font-size: 15px; }
+.chg-up { color: var(--bad); }
+.chg-down { color: var(--good); }
+.pill-up { color: var(--bad); }
+.pill-down { color: var(--good); }
+.tree-row .pill { margin-left: 8px; flex: none; }
+.chip-up[aria-pressed="true"] { border-color: var(--bad); }
+.chip-down[aria-pressed="true"] { border-color: var(--good); }
+table.data .loc.chg-up { color: var(--bad); }
+table.data .loc.chg-down { color: var(--good); }
+
+@media (max-width: 720px) {
+  .delta-grid { grid-template-columns: minmax(0, 1fr) 90px 100px; }
+  .delta-grid > :nth-child(2), .delta-grid > :nth-child(5) { display: none; }
+  .delta-grid > :nth-child(4) { display: block; }
+}

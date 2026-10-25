@@ -122,6 +122,9 @@ enum Command {
         /// Also list sites that did not change
         #[arg(long)]
         all: bool,
+        /// Also write the comparison as an interactive HTML report here
+        #[arg(long, value_name = "FILE")]
+        html: Option<PathBuf>,
     },
 }
 
@@ -183,6 +186,7 @@ fn main() -> ExitCode {
             min_change,
             depth,
             all,
+            html,
         } => commands::diff::run(commands::diff::DiffArgs {
             before,
             after,
@@ -194,6 +198,7 @@ fn main() -> ExitCode {
             min_change,
             depth,
             include_unchanged: all,
+            html,
         }),
     };
     match result {

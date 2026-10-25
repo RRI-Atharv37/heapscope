@@ -21,6 +21,8 @@ pub struct DiffArgs {
     pub min_change: u64,
     pub depth: usize,
     pub include_unchanged: bool,
+    /// Also write the comparison as an interactive HTML report.
+    pub html: Option<PathBuf>,
 }
 
 fn load(path: &Path) -> Result<Analysis, String> {
@@ -61,34 +63,61 @@ pub fn run(args: DiffArgs) -> Result<ExitCode, String> {
         include_unchanged: args.include_unchanged,
         ..DiffOptions::default()
     };
-    let (d, title) = match (&args.after, &args.markers) {
+    // The analyses are kept for the HTML report, which shows the delta tree of both sides.
+    let (d, title, sides) = match (&args.after, &args.markers) {
         (Some(after), None) => {
             let a = load(&args.before)?;
             let b = load(after)?;
             let title = format!("{} -> {}", args.before.display(), after.display());
-            (diff::diff(&a, &b, &opts), title)
+            let d = diff::diff(&a, &b, &opts);
+            (d, title, (a, Point::End, b, Point::End))
         }
         (None, Some((from, to))) => {
             let a = load(&args.before)?;
             let (p, q) = (point(&a, from)?, point(&a, to)?);
             let d = diff::diff_points(&a, p, q, &opts)?;
-            (
-                d,
-                format!("{}: marker '{from}' -> '{to}'", args.before.display()),
-            )
+            let title = format!("{}: marker '{from}' -> '{to}'", args.before.display());
+            let b = a.clone();
+            (d, title, (a, p, b, q))
         }
         (Some(_), Some(_)) => {
             return Err("--markers compares two points of one trace; give one trace file".into())
         }
         (None, None) => {
             return Err(
-                "give a second trace file, or --markers FROM TO to compare two markers of \
-                 one trace"
+                "give a second trace file, or --markers FROM TO to compare two markers of                  one trace"
                     .into(),
             )
         }
     };
     print(&d, &title, args.limit);
+    if let Some(path) = &args.html {
+        let (a, p, b, q) = &sides;
+        let label = |file: &Path| file.display().to_string();
+        let (first, second) = match &args.after {
+            Some(after) => (label(&args.before), label(after)),
+            None => (label(&args.before), label(&args.before)),
+        };
+        let page = heapscope_report::render_diff(
+            &heapscope_report::Side {
+                analysis: a,
+                point: *p,
+                label: first,
+            },
+            &heapscope_report::Side {
+                analysis: b,
+                point: *q,
+                label: second,
+            },
+            &d,
+        )?;
+        std::fs::write(path, &page).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        eprintln!(
+            "heapscope: wrote report {} ({})",
+            path.display(),
+            bytes(page.len() as u64)
+        );
+    }
     Ok(ExitCode::SUCCESS)
 }
 
