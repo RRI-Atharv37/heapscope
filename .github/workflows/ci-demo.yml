@@ -1,0 +1,134 @@
+# Runs the GitHub Actions template on examples/ci-demo. Start it by hand (Actions > ci-demo >
+# Run workflow); tick "regression" to build the regressed version, which must fail the gate.
+# Needs the repository secret HEAPSCOPE_LICENSE and the repository variables HEAPSCOPE_URL,
+# HEAPSCOPE_SHA256, GATE_URL and GATE_SHA256 (Settings > Secrets and variables > Actions).
+#
+# What it does: downloads and checks `heapscope` and `heapscope-ci`, builds your program, runs it
+# under HeapScope a few times and compares the median with the baseline committed in
+# heapscope-baselines/. A regression fails the job, writes the verdict into the run summary, and
+# (on pull requests) into a comment. The HTML report is uploaded as an artifact either way.
+#
+# You need: a Windows x64 program built with debug info, a committed baseline, and the repository
+# secret HEAPSCOPE_LICENSE (Settings > Secrets and variables > Actions).
+name: ci-demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      regression:
+        description: Build the version with the seeded memory regression
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write   # only for the PR comment; remove with COMMENT: 'false'
+
+concurrency:
+  group: heapscope-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # ---- Fill these in. The links and checksums come with the zip files you were sent. ----
+  HEAPSCOPE_URL: ${{ vars.HEAPSCOPE_URL }}
+  HEAPSCOPE_SHA256: ${{ vars.HEAPSCOPE_SHA256 }}
+  GATE_URL: ${{ vars.GATE_URL }}
+  GATE_SHA256: ${{ vars.GATE_SHA256 }}
+
+  # ---- The scenario ----
+  SCENARIO: startup                       # also the baseline file name
+  BASELINE_DIR: examples/ci-demo/heapscope-baselines       # where <SCENARIO>.hsbaseline.json is committed
+  APP: build/RelWithDebInfo/ci-demo.exe                      # your program, built by the Build step below
+  APP_ARGS: ""                            # the demo takes none
+  FAIL_ON: "--fail-on peak:+10% --fail-on leak_bytes:+4KB --fail-on leaks:+10"
+  REPEAT: "3"                             # runs per gate; the median is compared
+  BUILD_FLAVOUR: release                  # release (/MD, /MT) or debug (/MDd, /MTd) CRT
+  COMMENT: "true"                         # post the verdict as a PR comment
+
+jobs:
+  gate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install HeapScope (download and verify)
+        shell: pwsh
+        run: |
+          function Get-Verified($url, $sha256, $dir) {
+            $zip = Join-Path $env:RUNNER_TEMP ([IO.Path]::GetFileName(([uri]$url).AbsolutePath))
+            Invoke-WebRequest -Uri $url -OutFile $zip
+            $actual = (Get-FileHash $zip -Algorithm SHA256).Hash
+            if ($actual -ne $sha256.ToUpper()) { throw "$url : SHA-256 is $actual, expected $sha256" }
+            Expand-Archive $zip -DestinationPath $dir
+          }
+          Get-Verified $env:HEAPSCOPE_URL $env:HEAPSCOPE_SHA256 "$env:RUNNER_TEMP\heapscope"
+          Get-Verified $env:GATE_URL $env:GATE_SHA256 "$env:RUNNER_TEMP\heapscope-ci"
+          # heapscope_capture.dll must stay next to heapscope.exe.
+          $hs = Get-ChildItem "$env:RUNNER_TEMP\heapscope" -Recurse -Filter heapscope.exe | Select-Object -First 1
+          $gate = Get-ChildItem "$env:RUNNER_TEMP\heapscope-ci" -Recurse -Filter heapscope-ci.exe | Select-Object -First 1
+          if (-not $hs -or -not $gate) { throw 'heapscope.exe or heapscope-ci.exe is not in the zip' }
+          "HEAPSCOPE_EXE=$($hs.FullName)" >> $env:GITHUB_ENV
+          $gate.DirectoryName >> $env:GITHUB_PATH
+
+      # ---- Replace with your own build. Keep the PDB next to the exe so the report has names. ----
+      - name: Build
+        shell: pwsh
+        run: |
+          $flag = if ("${{ inputs.regression }}" -eq "true") { "-DDEMO_REGRESSION=ON" } else { "-DDEMO_REGRESSION=OFF" }
+          cmake -S examples/ci-demo -B build -G "Visual Studio 17 2022" -A x64 $flag
+          cmake --build build --config RelWithDebInfo
+
+      - name: Gate
+        id: gate
+        shell: pwsh
+        env:
+          HEAPSCOPE_LICENSE: ${{ secrets.HEAPSCOPE_LICENSE }}
+        run: |
+          $rules = $env:FAIL_ON -split '\s+' | Where-Object { $_ }
+          $appArgs = $env:APP_ARGS -split '\s+' | Where-Object { $_ }
+          heapscope-ci gate --scenario $env:SCENARIO --run --repeat $env:REPEAT `
+            --baseline-dir $env:BASELINE_DIR --build-flavour $env:BUILD_FLAVOUR @rules --markdown verdict.md -- $env:APP @appArgs
+          # Keep the exit code for the last step so the report and comment still happen.
+          "exit_code=$LASTEXITCODE" >> $env:GITHUB_OUTPUT
+          exit 0
+
+      - name: HTML report
+        if: always()
+        shell: pwsh
+        run: |
+          $appArgs = $env:APP_ARGS -split '\s+' | Where-Object { $_ }
+          & $env:HEAPSCOPE_EXE run -o "$env:SCENARIO.hstrace" -- $env:APP @appArgs
+          & $env:HEAPSCOPE_EXE report "$env:SCENARIO.hstrace" -o "$env:SCENARIO-report.html"
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: heapscope-report
+          path: |
+            ${{ env.SCENARIO }}-report.html
+            verdict.md
+          if-no-files-found: ignore
+
+      - name: Comment on the pull request
+        if: always() && env.COMMENT == 'true' && false
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('verdict.md')) return;
+            const marker = `<!-- heapscope-gate:${process.env.SCENARIO} -->`;
+            const body = marker + '\n' + fs.readFileSync('verdict.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const old = comments.find(c => c.body.startsWith(marker));
+            if (old) await github.rest.issues.updateComment({ owner, repo, comment_id: old.id, body });
+            else await github.rest.issues.createComment({ owner, repo, issue_number, body });
+
+      - name: Fail on regression
+        if: steps.gate.outputs.exit_code != '0'
+        shell: pwsh
+        run: |
+          Write-Host "heapscope-ci exited with ${{ steps.gate.outputs.exit_code }} (1 regression, 2 usage, 3 licence, 4 input not accepted)"
+          exit ${{ steps.gate.outputs.exit_code }}

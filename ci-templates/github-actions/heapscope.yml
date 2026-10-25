@@ -31,6 +31,7 @@ env:
 
   # ---- The scenario ----
   SCENARIO: startup                       # also the baseline file name
+  BASELINE_DIR: heapscope-baselines       # where <SCENARIO>.hsbaseline.json is committed
   APP: build/app.exe                      # your program, built by the Build step below
   APP_ARGS: "--scenario startup"          # arguments for it, split on spaces
   FAIL_ON: "--fail-on peak:+5% --fail-on leak_bytes:+64KB --fail-on leaks:+10"
@@ -79,7 +80,7 @@ jobs:
           $rules = $env:FAIL_ON -split '\s+' | Where-Object { $_ }
           $appArgs = $env:APP_ARGS -split '\s+' | Where-Object { $_ }
           heapscope-ci gate --scenario $env:SCENARIO --run --repeat $env:REPEAT `
-            --build-flavour $env:BUILD_FLAVOUR @rules --markdown verdict.md -- $env:APP @appArgs
+            --baseline-dir $env:BASELINE_DIR --build-flavour $env:BUILD_FLAVOUR @rules --markdown verdict.md -- $env:APP @appArgs
           # Keep the exit code for the last step so the report and comment still happen.
           "exit_code=$LASTEXITCODE" >> $env:GITHUB_OUTPUT
           exit 0

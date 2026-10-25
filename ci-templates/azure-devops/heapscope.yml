@@ -26,6 +26,7 @@ variables:
 
   # ---- The scenario ----
   scenario: startup                     # also the baseline file name
+  baselineDir: heapscope-baselines      # where <scenario>.hsbaseline.json is committed
   app: build/RelWithDebInfo/app.exe     # your program, built by the Build step below
   appArgs: "--scenario startup"         # arguments for it, split on spaces
   failOn: "--fail-on peak:+5% --fail-on leak_bytes:+64KB --fail-on leaks:+10"
@@ -63,7 +64,7 @@ steps:
       $rules = '$(failOn)' -split '\s+' | Where-Object { $_ }
       $appArgs = '$(appArgs)' -split '\s+' | Where-Object { $_ }
       heapscope-ci gate --scenario '$(scenario)' --run --repeat '$(repeat)' `
-        --build-flavour '$(buildFlavour)' @rules --markdown verdict.md -- '$(app)' @appArgs
+        --baseline-dir '$(baselineDir)' --build-flavour '$(buildFlavour)' @rules --markdown verdict.md -- '$(app)' @appArgs
       # Keep the exit code for the last step so the report is still published.
       Write-Host "##vso[task.setvariable variable=GATE_EXIT]$LASTEXITCODE"
       exit 0
