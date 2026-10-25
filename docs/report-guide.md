@@ -1,4 +1,4 @@
-# Reading leak, diff and HTML reports (draft)
+# Reading leak, diff and HTML reports
 
 This explains what HeapScope's leak candidates and snapshot diffs mean, and how to silence the
 ones you know are fine. `heapscope analyze` prints the leak report (`--suppressions FILE` adds your own rules,
@@ -16,8 +16,8 @@ runtime frames hidden) and by **kind of object**:
 |---|---|
 | `heap` | `malloc`, `new`, `HeapAlloc` and friends |
 | `pool` | memory from a custom pool or arena registered through the C API |
-| `virtual` | `VirtualAlloc` reservations |
-| `handle` | kernel handles opened and never closed (counted, no byte size) |
+| `virtual` | `VirtualAlloc` reservations (the format has it; `heapscope run` does not record them yet) |
+| `handle` | kernel handles opened and never closed (the format has it; not recorded yet) |
 
 Candidates are listed largest first. Each shows how many allocations are live, their total size,
 and when the oldest and newest of them were made.

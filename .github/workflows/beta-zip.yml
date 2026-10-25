@@ -5,12 +5,10 @@ name: beta-zip
 # The SHA-256 is printed in the job summary: it goes into the CI templates (HEAPSCOPE_SHA256).
 # No cache on purpose: this builds what gets shipped.
 on:
-  workflow_dispatch:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:   # tags are handled by release.yml
 
 permissions:
-  contents: write   # create the pre-release on a tag
+  contents: read
 
 jobs:
   package:

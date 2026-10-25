@@ -1,0 +1,95 @@
+name: release
+
+# Tag v* -> build -> (sign with SignPath once approved) -> package -> GitHub Release.
+# Builds what ships: no actions/cache, Cargo.lock is committed and --locked is used, and all build
+# settings live in this repository (SignPath checks the origin of what it signs).
+#
+# Signing is skipped until the repository variable SIGNPATH_ORGANIZATION_ID is set (after the
+# SignPath Foundation approves the project) together with the secret SIGNPATH_API_TOKEN and the
+# variables SIGNPATH_PROJECT_SLUG, SIGNPATH_POLICY_SLUG and SIGNPATH_SIGNING_POLICY_SLUG.
+# Until then the release is published unsigned and marked as such.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # create the release
+  id-token: write   # SignPath origin verification
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      SIGN: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Report template is up to date
+        working-directory: report
+        run: |
+          npm ci
+          npm run build
+          git diff --exit-code -- ../crates/heapscope-report/assets/report-template.html
+      - name: Check the tag matches the crate version
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME.TrimStart('v')
+          $crate = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          # 0.1.0-beta style tags are allowed to carry a suffix after the crate version.
+          if (-not $tag.StartsWith($crate)) { throw "tag $tag does not start with the crate version $crate" }
+      - name: Test
+        run: |
+          cargo build --workspace --locked
+          cargo test --workspace --locked
+      - name: Build and stage
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          ./scripts/package-beta.ps1 -Version $version
+          # Stage the binaries separately so they can be signed before they are zipped.
+          $stage = "build/dist/heapscope-$version"
+          Compress-Archive -Path "$stage/heapscope.exe", "$stage/heapscope_capture.dll" -DestinationPath build/unsigned-binaries.zip -Force
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Upload binaries for signing
+        if: env.SIGN == 'true'
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-binaries
+          path: build/unsigned-binaries.zip
+      - name: Sign with SignPath
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: build/signed
+      - name: Repack with the signed binaries
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $stage = "build/dist/heapscope-$env:VERSION"
+          Expand-Archive build/signed/*.zip -DestinationPath $stage -Force
+          Remove-Item "build/dist/heapscope-$env:VERSION.zip"
+          Compress-Archive -Path "$stage/*" -DestinationPath "build/dist/heapscope-$env:VERSION.zip"
+          Get-AuthenticodeSignature "$stage/heapscope.exe", "$stage/heapscope_capture.dll" | Format-Table Path, Status
+
+      - name: Checksum and publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = "build/dist/heapscope-$env:VERSION.zip"
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
+          "$hash  $(Split-Path $zip -Leaf)" > "$zip.sha256"
+          $signed = if ($env:SIGN -eq 'true') { 'Signed with SignPath Foundation (see CODE_SIGNING_POLICY.md).' } else { 'UNSIGNED build: Windows may warn or block it. See docs/troubleshooting.md.' }
+          "$signed`n`nSHA-256: ``$hash```n`nChanges: CHANGELOG.md" > notes.md
+          $pre = if ($env:VERSION -match '-') { '--prerelease' } else { '' }
+          gh release create $env:GITHUB_REF_NAME $zip "$zip.sha256" $pre --title $env:GITHUB_REF_NAME --notes-file notes.md

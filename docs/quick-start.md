@@ -7,7 +7,8 @@ went and what was never freed. It works on 64-bit programs, with no source chang
 
 Unpack `heapscope-0.1.0-beta.zip` and put the folder on `PATH`; `heapscope.exe` and
 `heapscope_capture.dll` must stay together. Windows 11 Smart App Control may block the unsigned
-binaries; see [capture options](capture-options.md#attach) for what that looks like.
+binaries; see [troubleshooting](troubleshooting.md) for what that looks like and what to do. If
+anything goes wrong later, start there.
 
 To build from source instead, you need Rust, the Visual Studio Build Tools with the Windows SDK,
 and CMake for the samples:
@@ -27,6 +28,11 @@ heapscope run -o leak.hstrace -- build\samples\RelWithDebInfo\leak.exe
 ```
 
 Everything after `--` is your program and its arguments. The trace is written to `leak.hstrace`.
+`leak.exe` deliberately leaks 100 blocks of 1 KiB (`operator new`) and 10 blocks of 64 KiB
+(`malloc`), so the analysis below should list those two call paths (`leak_site_a`, `leak_site_b`)
+as leak candidates, about 740 KiB in total, plus a little loader and runtime noise. If it does,
+everything works.
+
 Build your own program with debug info (a `.pdb` next to the exe, or on `_NT_SYMBOL_PATH`) or the
 report shows `module+0xoffset` instead of function names and lines.
 

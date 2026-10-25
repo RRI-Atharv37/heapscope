@@ -14,6 +14,7 @@ target/
 .claude/
 .agents/
 .vscode/
+CLAUDE.md
 
 # Report front-end (S3)
 report/node_modules/

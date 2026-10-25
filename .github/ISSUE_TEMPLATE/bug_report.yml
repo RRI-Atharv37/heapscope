@@ -1,0 +1,41 @@
+name: Bug report
+description: Something is wrong or crashes
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [troubleshooting](../blob/main/docs/troubleshooting.md) first. Do not attach traces that contain private data; a trace holds module paths and function names.
+  - type: input
+    id: version
+    attributes:
+      label: HeapScope version
+      description: From the zip name or CHANGELOG, for example 0.1.0-beta
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 23H2
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected and what happened
+      description: Include the full output and any error text.
+    validations:
+      required: true
+  - type: textarea
+    id: target
+    attributes:
+      label: The program you profiled
+      description: Compiler and CRT (/MD, /MT, Debug), 64-bit, any custom allocators, whether it is a service or elevated.

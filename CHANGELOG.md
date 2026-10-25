@@ -7,8 +7,9 @@ First beta, for the founding users.
 ### Capture
 - `heapscope run -- app.exe` records every heap allocation of a 64-bit Windows program into an
   `.hstrace` file, with no source changes; `heapscope attach --pid N` does it for a running process.
-- Covers the C and C++ runtime, `HeapAlloc`, `VirtualAlloc` and kernel handles, with dynamic or
-  static CRT. Custom allocators can report through the optional MIT-licensed header in `include/`.
+- Covers the C and C++ runtime and `HeapAlloc`, with dynamic or static CRT. `VirtualAlloc` and
+  kernel handles are not recorded yet. Custom allocators can report through the optional
+  MIT-licensed header in `include/`.
 - `--sample N` and `--min-lifetime` lower the overhead; the report says when numbers are estimates.
 
 ### Analysis

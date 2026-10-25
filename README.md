@@ -18,7 +18,8 @@ Questions and feedback: GitHub Discussions on this repository.
 
 [Quick start](docs/quick-start.md) · [capture options](docs/capture-options.md) ·
 [report guide](docs/report-guide.md) · [custom allocators](docs/custom-allocators.md) ·
-[JSON summary](docs/json-schema.md) · [CI gate](docs/ci-gate.md) · [trace format](docs/trace-format.md)
+[JSON summary](docs/json-schema.md) · [CI gate](docs/ci-gate.md) · [trace format](docs/trace-format.md) ·
+[troubleshooting](docs/troubleshooting.md) · [FAQ](docs/faq.md) · [index](docs/README.md)
 
 ## Build from source
 
@@ -60,6 +61,11 @@ local builds; see [capture options](docs/capture-options.md#attach) for what a b
 | `ci-templates` | GitHub Actions and Azure Pipelines templates for the CI gate |
 | `examples/ci-demo` | a small project with a clean and a regressed build, for trying the gate |
 | `samples` | small C++ programs with known allocation behaviour |
+
+## Contributing and security
+
+[Contributing](CONTRIBUTING.md) · [code of conduct](CODE_OF_CONDUCT.md) · [security policy](SECURITY.md) ·
+[code signing policy](CODE_SIGNING_POLICY.md)
 
 ## Licence
 
