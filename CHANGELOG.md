@@ -23,11 +23,12 @@ First beta, for the founding users.
 
 ### CI gate (paid tier)
 - `heapscope-ci` fails a build on a memory regression against a baseline in your repository,
-  licensed offline. Templates for GitHub Actions and Azure Pipelines and a demo project are in
+  licensed offline. Templates for GitHub Actions (tested) and Azure Pipelines (not yet run on Azure) and a demo project are in
   `ci-templates/` and `examples/ci-demo/`; see `docs/ci-gate.md`.
 
 ### Known limits
 - Windows x64 only; MSVC-built programs are the tested case.
 - Sampled and attached captures cannot be used with the CI gate.
 - Unsigned binaries: Windows 11 Smart App Control may block them.
+- The Azure Pipelines template has not been run on Azure yet.
 - Not yet tested on large real-world applications.

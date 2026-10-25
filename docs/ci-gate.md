@@ -5,7 +5,9 @@ baseline stored in your repository, and fails the build when memory got worse. I
 no HeapScope server is involved, and the licence is checked locally.
 
 Two ready-made pipelines are in [`ci-templates/`](../ci-templates): GitHub Actions and Azure
-Pipelines. [`examples/ci-demo`](../examples/ci-demo) is a small project with a clean and a
+Pipelines. The GitHub Actions one has been run end to end (a clean build passes, a seeded regression
+fails). **The Azure Pipelines one is written to the same design but has not been run on Azure yet**;
+expect to adjust it, and tell us what you had to change. [`examples/ci-demo`](../examples/ci-demo) is a small project with a clean and a
 regressed build to try them on.
 
 ## What you need

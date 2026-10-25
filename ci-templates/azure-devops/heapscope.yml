@@ -1,6 +1,9 @@
 # HeapScope memory gate for Azure Pipelines. Copy to azure-pipelines.yml or include it from yours.
 # Setup guide: docs/ci-gate.md
 #
+# NOT YET RUN ON AZURE. Same design as the GitHub Actions template (which has been run), but this
+# file has only been checked for valid YAML. Expect to adjust it, and please report what you changed.
+#
 # Same steps as the GitHub Actions template: download and verify `heapscope` and `heapscope-ci`,
 # build your program, gate the median of a few runs against heapscope-baselines/, publish the HTML
 # report. The verdict appears on the run's Extensions tab (##vso[task.uploadsummary]).
