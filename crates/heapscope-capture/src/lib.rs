@@ -52,9 +52,10 @@ pub unsafe extern "system" fn DllMain(_module: HMODULE, reason: u32, reserved: *
             1
         }
         DLL_PROCESS_DETACH => {
-            // A non-null `reserved` means the process is ending: other threads are already gone
-            // (including the flush thread), so write the final flush from here.
-            if !reserved.is_null() {
+            // A non-null `reserved` means the process is ending. Normally the final
+            // `NtTerminateProcess` hook writes the footer, after every DLL (this one detaches
+            // first) has freed what it holds. Without that hook this is the last chance.
+            if !reserved.is_null() && !hooks::exit::installed() {
                 hooks::pin_guard();
                 flusher::finish_capture(true);
             }

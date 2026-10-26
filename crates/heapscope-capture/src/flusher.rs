@@ -32,6 +32,21 @@ const IDLE_SLEEP_MS: u32 = 5;
 /// Auto-reset event the flush thread waits on when idle; producers set it when a ring is full.
 static WAKE: core::sync::atomic::AtomicIsize = core::sync::atomic::AtomicIsize::new(0);
 
+/// 0 = run, 1 = a process exit asks the flush thread to park, 2 = parked (outside every lock).
+static PARK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Ask the flush thread to stop at a safe point and wait for it, so that the system killing it
+/// during process exit cannot leave the sink locked. Returns once it is parked or after a short wait.
+pub fn park() {
+    PARK.store(1, SeqCst);
+    wake();
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while PARK.load(SeqCst) != 2 && Instant::now() < deadline {
+        // SAFETY: plain Win32 call.
+        unsafe { Sleep(1) };
+    }
+}
+
 /// Wake the flush thread now.
 pub fn wake() {
     let h = WAKE.load(Relaxed);
@@ -302,9 +317,17 @@ impl Sink {
         loop {
             let mut got = 0;
             buffer::for_each(|tb| {
-                let retired = tb.retired.load(Acquire) != 0;
+                // The owner has ended: nothing more can arrive, so write what it still holds back.
+                let gone = buffer::owner_gone(tb);
+                if gone {
+                    // SAFETY: the owning thread is gone; the flush thread is now the only producer.
+                    unsafe {
+                        sampling::flush_pending(tb);
+                        sampling::emit_churn(tb);
+                    }
+                }
                 got += tb.drain(|rec| self.handle(rec));
-                if retired {
+                if gone {
                     buffer::reclaim_if_done(tb);
                 }
             });
@@ -331,6 +354,13 @@ impl Sink {
 /// Entry point of the flush thread (called after the guard is pinned).
 pub fn run() {
     loop {
+        if PARK.load(SeqCst) == 1 {
+            PARK.store(2, SeqCst);
+            loop {
+                // SAFETY: plain Win32 call; the process is about to end.
+                unsafe { Sleep(1000) };
+            }
+        }
         let (seen, stop) = {
             let mut guard = SINK.lock().unwrap_or_else(|e| e.into_inner());
             let Some(sink) = guard.as_mut() else { return };
@@ -416,6 +446,11 @@ pub unsafe fn finish_capture(exiting: bool) {
         }
     }
     STATE.store(STATE_OFF, SeqCst);
+    if !exiting {
+        buffer::decommit_all();
+        // SAFETY: no callback can run once this returns, and the flush thread is the caller.
+        modules::remove();
+    }
     control::set_state(state::DORMANT);
     // Keep the lock released and the DLL loaded: threads may still be inside hook code.
     drop(guard);

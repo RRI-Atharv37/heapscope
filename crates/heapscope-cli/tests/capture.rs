@@ -493,3 +493,150 @@ fn header_compiles_as_c_and_macros_work_from_racing_threads() {
     let labels: Vec<&str> = r.markers.iter().map(|(_, l)| l.as_str()).collect();
     assert_eq!(labels, ["c-start", "c-end"]);
 }
+
+// ---- H1: capture lifecycle (teardown, exceptions, memory after detach) ----
+
+#[test]
+fn dll_statics_freed_during_process_shutdown_leave_no_leak_candidate() {
+    let Some(dir) = samples_dir() else { return };
+    if !sample(&dir, "dll-statics").is_file() {
+        assert!(
+            std::env::var_os("HEAPSCOPE_REQUIRE_SAMPLES").is_none(),
+            "dll-statics sample is not built"
+        );
+        return;
+    }
+    let work = scratch("dll-statics");
+    let marker = work.join("destructor-ran.txt");
+    let _ = std::fs::remove_file(&marker);
+    let trace = work.join("dll-statics.hstrace");
+    let out = heapscope()
+        .env("HEAPSCOPE_DS_MARKER", &marker)
+        .arg("run")
+        .arg("-o")
+        .arg(&trace)
+        .arg("--")
+        .arg(sample(&dir, "dll-statics"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stdout_text(&out));
+    assert!(
+        marker.is_file(),
+        "the DLL's static destructor did not run, so this test proves nothing"
+    );
+    let r = replay(&trace);
+    assert!(r.footer.is_some());
+    let site = r.site_of_size(7_777, 1).expect("the DLL's allocation");
+    assert!(r.stack_reaches_module(site, "dll_statics_lib.dll"));
+    assert_eq!(
+        r.live_at(site).allocs,
+        0,
+        "the block freed by the DLL's destructor is still live in the trace"
+    );
+}
+
+#[test]
+fn thread_churn_leaves_no_per_thread_live_blocks_and_no_missed_frees() {
+    let Some(dir) = samples_dir() else { return };
+    if !sample(&dir, "thread-churn").is_file() {
+        assert!(
+            std::env::var_os("HEAPSCOPE_REQUIRE_SAMPLES").is_none(),
+            "thread-churn sample is not built"
+        );
+        return;
+    }
+    let (few, _, _) = run_sample(&dir, "thread-churn", "churn-few", &[], &["4"]);
+    let (many, _, _) = run_sample(&dir, "thread-churn", "churn-many", &[], &["64"]);
+    assert_eq!(many.footer.unwrap().dropped.overflow, 0);
+    // Per-thread blocks (loader, FLS, CRT) must be freed in the trace as they are in the process, so
+    // 60 more threads leave nothing more behind.
+    assert!(
+        many.live.len() <= few.live.len() + 2,
+        "live blocks grow with thread count: {} (4 threads) vs {} (64 threads)",
+        few.live.len(),
+        many.live.len()
+    );
+    assert!(
+        many.frees_without_alloc <= few.frees_without_alloc,
+        "frees of unknown blocks grow with thread count: {} vs {}",
+        few.frees_without_alloc,
+        many.frees_without_alloc
+    );
+}
+
+#[test]
+fn a_heap_exception_caught_by_the_program_does_not_stop_recording() {
+    let Some(dir) = samples_dir() else { return };
+    if !sample(&dir, "heap-exception").is_file() {
+        assert!(
+            std::env::var_os("HEAPSCOPE_REQUIRE_SAMPLES").is_none(),
+            "heap-exception sample is not built"
+        );
+        return;
+    }
+    let (r, _, out) = run_sample(&dir, "heap-exception", "heap-exception", &[], &[]);
+    assert!(stdout_text(&out).contains("3 exceptions caught"));
+    assert_eq!(
+        r.count_allocs_of_size(3_333),
+        50,
+        "allocations after a caught heap exception were not recorded"
+    );
+    assert!(r.footer.is_some());
+}
+
+#[test]
+fn attach_then_detach_gives_the_capture_buffers_back() {
+    let Some(dir) = samples_dir() else { return };
+    let work = scratch("attach-memory");
+    let trace = work.join("growth-mem.hstrace");
+    let mut growth = Talker::spawn({
+        let mut c = std::process::Command::new(sample(&dir, "growth"));
+        c.arg("--wait-for-attach");
+        c
+    });
+    let pid: u32 = growth
+        .read_line()
+        .strip_prefix("PID ")
+        .expect("PID line")
+        .parse()
+        .unwrap();
+    let private = |g: &mut Talker| -> u64 {
+        g.send("mem");
+        g.read_line()
+            .strip_prefix("private ")
+            .expect("private line")
+            .parse()
+            .unwrap()
+    };
+    // Warm up the allocator so the baseline already holds what a grow/shrink cycle leaves behind.
+    growth.send("grow 4");
+    assert_eq!(growth.read_line(), "grown 4");
+    growth.send("shrink 4");
+    assert_eq!(growth.read_line(), "shrunk 4");
+    let before = private(&mut growth);
+
+    let mut att = Talker::spawn({
+        let mut c = heapscope();
+        c.args(["attach", "--pid", &pid.to_string(), "--until-eof", "-o"])
+            .arg(&trace);
+        c
+    });
+    att.read_until("attached to process");
+    growth.send("grow 4");
+    assert_eq!(growth.read_line(), "grown 4");
+    growth.send("shrink 4");
+    assert_eq!(growth.read_line(), "shrunk 4");
+    att.close_stdin();
+    att.read_until("detached from process");
+    att.read_until("heapscope:");
+    assert!(att.child.wait().unwrap().success());
+
+    let after = private(&mut growth);
+    growth.send("quit");
+    assert_eq!(growth.child.wait().unwrap().code(), Some(0));
+    let extra = after.saturating_sub(before);
+    assert!(
+        extra < 1_536 * 1024,
+        "{extra} extra private bytes remain after detach (before {before}, after {after})"
+    );
+}

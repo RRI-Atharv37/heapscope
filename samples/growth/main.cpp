@@ -4,6 +4,7 @@
 //        growth --wait-for-attach      (for `heapscope attach`: prints "PID <n>", then obeys stdin lines)
 //            grow N    allocate N more 64 KiB blocks, keep them, reply "grown N"
 //            shrink N  free N of the blocks allocated by `grow`, reply "shrunk N"
+//            mem       reply "private <bytes>": the process's private (committed) memory
 //            quit      exit with code 0
 #include "../common/expected.hpp"
 
@@ -14,6 +15,7 @@
 #include <string>
 #include <thread>
 #include <windows.h>
+#include <psapi.h>
 
 #if defined(_MSC_VER)
 #define NOINLINE __declspec(noinline)
@@ -50,6 +52,11 @@ static int wait_for_attach() {
         unsigned n = 0;
         if (std::sscanf(line, "grow %u", &n) == 1) { attach_grow(n); std::printf("grown %u\n", n); }
         else if (std::sscanf(line, "shrink %u", &n) == 1) { attach_shrink(n); std::printf("shrunk %u\n", n); }
+        else if (std::strncmp(line, "mem", 3) == 0) {
+            PROCESS_MEMORY_COUNTERS_EX pmc = {};
+            GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof pmc);
+            std::printf("private %llu\n", (unsigned long long)pmc.PrivateUsage);
+        }
         else if (std::strncmp(line, "quit", 4) == 0) break;
         std::fflush(stdout);
     }

@@ -116,9 +116,9 @@ pub unsafe fn leave(tb: &ThreadBuf) {
     }
 }
 
-/// Install the ntdll heap hooks and the exit hook. Everything is created before anything is
-/// enabled. Without the exit hook capture still works, but the final flush then depends on the
-/// flush thread surviving until `DLL_PROCESS_DETACH`, so that part is not required.
+/// Install the ntdll heap hooks and the process-termination hook. Everything is created before
+/// anything is enabled. Without the termination hook capture still works, but the final flush then
+/// happens in `DLL_PROCESS_DETACH` (before other DLLs free their statics), so it is not required.
 pub unsafe fn install() -> bool {
     if !heap::create() {
         return false;

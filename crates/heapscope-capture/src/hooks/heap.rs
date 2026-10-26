@@ -31,6 +31,29 @@ type ReallocFn = unsafe extern "system" fn(*mut c_void, u32, *mut c_void, usize)
 type FreeFn = unsafe extern "system" fn(*mut c_void, u32, *mut c_void) -> u8;
 type SizeFn = unsafe extern "system" fn(*mut c_void, u32, *const c_void) -> usize;
 
+extern "C" {
+    fn hs_call_alloc(f: AllocFn, heap: *mut c_void, flags: u32, size: usize) -> *mut c_void;
+    fn hs_call_realloc(
+        f: ReallocFn,
+        heap: *mut c_void,
+        flags: u32,
+        old: *mut c_void,
+        size: usize,
+    ) -> *mut c_void;
+    fn hs_call_free(f: FreeFn, heap: *mut c_void, flags: u32, p: *mut c_void) -> u8;
+}
+
+/// Called by the C shim when an exception unwinds out of a heap call: the hook will not reach its
+/// `leave`, so restore what `enter` set on this thread.
+#[no_mangle]
+pub unsafe extern "C" fn hs_on_unwind() {
+    let tb = super::current_buf();
+    if !tb.is_null() {
+        (*tb).busy.store(0, Release);
+    }
+    super::unpin_guard();
+}
+
 /// Create (but do not enable) the three hooks.
 pub unsafe fn create() -> bool {
     fn hook(name: &str, detour: *mut c_void, slot: &AtomicPtr<c_void>) -> bool {
@@ -140,7 +163,10 @@ unsafe fn record_realloc(
 unsafe extern "system" fn hk_alloc(heap: *mut c_void, flags: u32, size: usize) -> *mut c_void {
     let orig: AllocFn = core::mem::transmute(ORIG_ALLOC.load(Relaxed));
     let tracked = enter();
-    let p = orig(heap, flags, size);
+    let p = match tracked {
+        Some(_) => hs_call_alloc(orig, heap, flags, size),
+        None => orig(heap, flags, size),
+    };
     if let Some(tb) = tracked {
         if !p.is_null() {
             let err = GetLastError();
@@ -178,7 +204,10 @@ unsafe extern "system" fn hk_realloc(
         }
         None => (0, 0),
     };
-    let p = orig(heap, flags, old, size);
+    let p = match tracked {
+        Some(_) => hs_call_realloc(orig, heap, flags, old, size),
+        None => orig(heap, flags, old, size),
+    };
     if let Some(tb) = tracked {
         if !p.is_null() {
             let err = GetLastError();
@@ -198,7 +227,10 @@ unsafe extern "system" fn hk_free(heap: *mut c_void, flags: u32, p: *mut c_void)
         record_free(tb, p as u64, clock::now_ns());
         SetLastError(err);
     }
-    let r = orig(heap, flags, p);
+    let r = match tracked {
+        Some(_) => hs_call_free(orig, heap, flags, p),
+        None => orig(heap, flags, p),
+    };
     if let Some(tb) = tracked {
         leave(tb);
     }

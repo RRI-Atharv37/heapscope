@@ -167,6 +167,7 @@ dependencies = [
 name = "heapscope-capture"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "embed-resource",
  "heapscope-control",
  "heapscope-trace",

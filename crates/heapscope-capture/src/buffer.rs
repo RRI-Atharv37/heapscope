@@ -9,13 +9,17 @@ use core::cell::UnsafeCell;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering::*};
 
+use windows_sys::Win32::Foundation::{CloseHandle, DuplicateHandle, HANDLE};
 use windows_sys::Win32::System::Memory::{
-    VirtualAlloc, VirtualFree, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
+    VirtualAlloc, VirtualFree, MEM_COMMIT, MEM_DECOMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
 };
-use windows_sys::Win32::System::Threading::SwitchToThread;
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, GetCurrentThread, SwitchToThread, WaitForSingleObject,
+};
 
 use crate::sampling::{self, ChurnSlot, Pend};
 
+const SYNCHRONIZE: u32 = 0x0010_0000;
 pub const RING_WORDS: usize = 1 << 18; // 2 MiB per thread
 const RING_MASK: usize = RING_WORDS - 1;
 pub const MAX_THREADS: usize = 4096;
@@ -60,8 +64,12 @@ pub struct ThreadBuf {
     _pad1: [u8; 56],
     /// 1 while the owner is inside a hook; the stop handshake waits for 0.
     pub busy: AtomicU32,
-    /// Set by the owner when its thread ends; the flush thread frees the buffer once drained.
-    pub retired: AtomicU32,
+    /// Handle that becomes signalled when the owning thread is gone (nothing can be recorded on
+    /// it any more); the flush thread frees the buffer once it is drained.
+    thread: HANDLE,
+    /// Bytes from the ring to the end of the region: what a final stop gives back. The header page
+    /// stays mapped so a thread that is late for the stop handshake never touches freed memory.
+    span: usize,
     pub tid: u32,
     reg_slot: u32,
     pub dropped_overflow: AtomicU64,
@@ -191,6 +199,20 @@ pub unsafe fn create_for_current_thread() -> *mut ThreadBuf {
         THREADS_WITHOUT_BUFFER.fetch_add(1, Relaxed);
         return null_mut();
     }
+    let mut thread: HANDLE = null_mut();
+    let process = GetCurrentProcess();
+    if DuplicateHandle(
+        process,
+        GetCurrentThread(),
+        process,
+        &mut thread,
+        SYNCHRONIZE,
+        0,
+        0,
+    ) == 0
+    {
+        thread = null_mut(); // such a buffer is only reclaimed by the final stop
+    }
     let teb: usize;
     core::arch::asm!("mov {}, gs:[0x48]", out(reg) teb, options(nostack, nomem, preserves_flags));
     let tb = region as *mut ThreadBuf;
@@ -211,7 +233,8 @@ pub unsafe fn create_for_current_thread() -> *mut ThreadBuf {
             tail: AtomicUsize::new(0),
             _pad1: [0; 56],
             busy: AtomicU32::new(0),
-            retired: AtomicU32::new(0),
+            thread,
+            span: total - off_ring,
             tid: teb as u32,
             reg_slot: 0,
             dropped_overflow: AtomicU64::new(0),
@@ -238,6 +261,9 @@ pub unsafe fn create_for_current_thread() -> *mut ThreadBuf {
             return tb;
         }
     }
+    if !thread.is_null() {
+        CloseHandle(thread);
+    }
     VirtualFree(region as *mut _, 0, MEM_RELEASE);
     THREADS_WITHOUT_BUFFER.fetch_add(1, Relaxed);
     null_mut()
@@ -255,9 +281,16 @@ pub fn for_each(mut f: impl FnMut(&ThreadBuf)) {
     }
 }
 
-/// Free a retired buffer once the flush thread has fully drained it.
+/// True once the owning thread has fully ended: whatever it did during teardown (the loader's
+/// per-thread frees run after `DLL_THREAD_DETACH`) is already in the ring.
+pub fn owner_gone(tb: &ThreadBuf) -> bool {
+    // SAFETY: plain Win32 call on a handle this module owns until `release`.
+    !tb.thread.is_null() && unsafe { WaitForSingleObject(tb.thread, 0) } == 0
+}
+
+/// Free the buffer of an ended thread once the flush thread has fully drained it.
 pub fn reclaim_if_done(tb: &ThreadBuf) -> bool {
-    if tb.retired.load(Acquire) == 0 || !tb.is_empty() {
+    if !tb.is_empty() {
         return false;
     }
     RECLAIMED_OVERFLOW.fetch_add(tb.dropped_overflow.load(Relaxed), Relaxed);
@@ -265,6 +298,20 @@ pub fn reclaim_if_done(tb: &ThreadBuf) -> bool {
     RECLAIMED_MIN_LIFETIME.fetch_add(tb.dropped_min_lifetime.load(Relaxed), Relaxed);
     release(tb);
     true
+}
+
+/// After the final drain: give the rings and caches of every thread that is outside the hooks back
+/// to the system. Only the header page stays, which late threads may still touch.
+pub fn decommit_all() {
+    for_each(|tb| {
+        if tb.busy.load(SeqCst) == 0 && tb.span != 0 {
+            // SAFETY: capture is off, so no thread uses the ring or its caches (a thread that is
+            // late for the stop handshake sees the state change before it gets to them).
+            unsafe {
+                VirtualFree(tb.ring as *mut _, tb.span, MEM_DECOMMIT);
+            }
+        }
+    });
 }
 
 /// Events lost so far: live buffers plus those already reclaimed.
@@ -279,37 +326,30 @@ pub fn dropped_totals() -> heapscope_trace::Dropped {
         d.min_lifetime += tb.dropped_min_lifetime.load(Relaxed);
         d.sampling += tb.dropped_sampling.load(Relaxed);
     });
-    d.overflow += THREADS_WITHOUT_BUFFER.load(Relaxed);
+    d.overflow += THREADS_WITHOUT_BUFFER.load(Relaxed) + crate::modules::dropped();
     d
 }
 
-/// `DLL_THREAD_DETACH`: hand the thread's pending allocations to the flush thread and retire.
+/// `DLL_THREAD_DETACH`. While capturing, nothing happens: the loader frees this thread's own
+/// per-thread blocks after every DLL has seen the detach, and those frees must still be recorded.
+/// The flush thread reclaims the buffer when the thread object is signalled ([`owner_gone`]).
 pub unsafe fn retire_current_thread() {
-    let tb = crate::hooks::current_buf();
-    // Whatever runs on this thread from now on (other DLLs' detach code) must not start a new buffer.
-    crate::hooks::pin_guard();
-    if tb.is_null() {
-        return;
-    }
-    crate::hooks::clear_current_buf();
-    let tb = &*tb;
-    match crate::STATE.load(SeqCst) {
-        crate::STATE_CAPTURING => {
-            tb.busy.store(1, SeqCst);
-            sampling::flush_pending(tb);
-            sampling::emit_churn(tb);
-            tb.busy.store(0, Release);
-            tb.retired.store(1, Release);
+    // Capture finished and nobody will ever read this buffer: give the memory back now.
+    if crate::STATE.load(SeqCst) == crate::STATE_OFF {
+        let tb = crate::hooks::current_buf();
+        if !tb.is_null() {
+            crate::hooks::clear_current_buf();
+            release(&*tb);
         }
-        // Capture finished and nobody will ever read this buffer: give the memory back now.
-        crate::STATE_OFF => release(tb),
-        // A stop is in progress; its final drain frees retired buffers.
-        _ => tb.retired.store(1, Release),
     }
 }
 
 fn release(tb: &ThreadBuf) {
     REGISTRY[tb.reg_slot as usize].store(null_mut(), Release);
+    if !tb.thread.is_null() {
+        // SAFETY: the handle was duplicated for this buffer and is closed exactly once, here.
+        unsafe { CloseHandle(tb.thread) };
+    }
     // SAFETY: the region starts at the ThreadBuf; the owning thread is the caller and has
     // already dropped its pointer to it.
     unsafe { VirtualFree(tb as *const ThreadBuf as *mut _, 0, MEM_RELEASE) };

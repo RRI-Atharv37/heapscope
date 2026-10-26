@@ -11,6 +11,11 @@ First beta, for the founding users.
   kernel handles are not recorded yet. Custom allocators can report through the optional
   MIT-licensed header in `include/`.
 - `--sample N` and `--min-lifetime` lower the overhead; the report says when numbers are estimates.
+- Frees made while a thread or the process shuts down are now recorded, so per-thread loader
+  blocks and memory a DLL frees in its static destructors no longer show up as live or as missed frees.
+- An exception raised out of a heap call (`HEAP_GENERATE_EXCEPTIONS`) no longer stops recording on that thread.
+- After `attach` ends, the per-thread capture buffers are released instead of staying committed.
+- Module paths longer than 260 characters are kept in full, and dropped module events are counted.
 
 ### Analysis
 - `heapscope analyze`: totals, peak, top allocation sites with source lines, and leak candidates

@@ -26,7 +26,8 @@ heapscope attach --pid 1234 -o out.hstrace [--duration 30s] [--sample N] [--min-
 HeapScope loads the DLL into the running process, records until the duration ends or you press
 Ctrl-C, then tells the DLL to flush and go **dormant**: its hooks pass straight through and the
 program keeps running normally. The DLL is never unloaded from a live process, so it stays in the
-program's memory (about 1 MB) until the program exits. A process can be captured **once per
+program's memory until the program exits. The capture buffers (2 MiB per thread that allocated)
+are given back when the capture ends; what stays is the DLL itself and one 4 KiB page per such thread. A process can be captured **once per
 lifetime**; a second attach is refused with an explanation.
 
 Each line you type on `attach`'s standard input becomes a **marker** in the trace (an empty line is

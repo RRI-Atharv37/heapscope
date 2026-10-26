@@ -11,7 +11,9 @@ use core::ptr::null_mut;
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
-use windows_sys::Win32::System::Memory::{VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE};
+use windows_sys::Win32::System::Memory::{
+    VirtualAlloc, VirtualFree, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
+};
 use windows_sys::Win32::System::ProcessStatus::{
     K32EnumProcessModules, K32GetModuleFileNameExW, K32GetModuleInformation, MODULEINFO,
 };
@@ -19,8 +21,11 @@ use windows_sys::Win32::System::Threading::{
     AcquireSRWLockExclusive, GetCurrentProcess, ReleaseSRWLockExclusive, SRWLOCK,
 };
 
-const QUEUE_CAP: usize = 512;
-const PATH_UNITS: usize = 260;
+/// Events kept between two drains. The queue is reserved up front and committed as it fills.
+const QUEUE_CAP: usize = 2048;
+/// Same limit as the modules listed at start.
+const PATH_UNITS: usize = 1024;
+const COMMIT_STEP: usize = 64 * 1024;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -47,6 +52,13 @@ pub struct ModuleEvent {
 
 static mut QUEUE: *mut Raw = null_mut();
 static mut QUEUE_LEN: usize = 0;
+static mut QUEUE_COMMITTED: usize = 0;
+static DROPPED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Load/unload events lost because the queue was full.
+pub fn dropped() -> u64 {
+    DROPPED.load(core::sync::atomic::Ordering::Relaxed)
+}
 static mut QUEUE_LOCK: SRWLOCK = SRWLOCK { Ptr: null_mut() };
 
 #[repr(C)]
@@ -76,7 +88,7 @@ pub unsafe fn init() -> bool {
     QUEUE = VirtualAlloc(
         core::ptr::null(),
         QUEUE_CAP * core::mem::size_of::<Raw>(),
-        MEM_COMMIT | MEM_RESERVE,
+        MEM_RESERVE,
         PAGE_READWRITE,
     ) as *mut Raw;
     if QUEUE.is_null() {
@@ -105,6 +117,10 @@ pub unsafe fn remove() {
     if cookie.is_null() {
         return;
     }
+    free_queue_after_unregister(cookie);
+}
+
+unsafe fn free_queue_after_unregister(cookie: *mut c_void) {
     let ntdll: Vec<u16> = "ntdll.dll\0".encode_utf16().collect();
     if let Some(f) = GetProcAddress(
         GetModuleHandleW(ntdll.as_ptr()),
@@ -112,6 +128,16 @@ pub unsafe fn remove() {
     ) {
         let unregister: UnregisterFn = core::mem::transmute(f);
         unregister(cookie);
+        // No callback is running or will run any more: give the queue back.
+        AcquireSRWLockExclusive(&raw mut QUEUE_LOCK);
+        let q = QUEUE;
+        QUEUE = null_mut();
+        QUEUE_LEN = 0;
+        QUEUE_COMMITTED = 0;
+        ReleaseSRWLockExclusive(&raw mut QUEUE_LOCK);
+        if !q.is_null() {
+            VirtualFree(q as *mut c_void, 0, MEM_RELEASE);
+        }
     }
 }
 
@@ -146,9 +172,26 @@ unsafe extern "system" fn callback(reason: u32, data: *const NotificationData, _
         }
     }
     AcquireSRWLockExclusive(&raw mut QUEUE_LOCK);
-    if QUEUE_LEN < QUEUE_CAP {
+    let end = (QUEUE_LEN + 1) * core::mem::size_of::<Raw>();
+    if !QUEUE.is_null() && QUEUE_LEN < QUEUE_CAP && end > QUEUE_COMMITTED {
+        let want = end.div_ceil(COMMIT_STEP) * COMMIT_STEP;
+        let want = want.min(QUEUE_CAP * core::mem::size_of::<Raw>());
+        if !VirtualAlloc(
+            (QUEUE as *mut u8).add(QUEUE_COMMITTED) as *const c_void,
+            want - QUEUE_COMMITTED,
+            MEM_COMMIT,
+            PAGE_READWRITE,
+        )
+        .is_null()
+        {
+            QUEUE_COMMITTED = want;
+        }
+    }
+    if !QUEUE.is_null() && QUEUE_LEN < QUEUE_CAP && end <= QUEUE_COMMITTED {
         *QUEUE.add(QUEUE_LEN) = ev;
         QUEUE_LEN += 1;
+    } else {
+        DROPPED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     }
     ReleaseSRWLockExclusive(&raw mut QUEUE_LOCK);
 }

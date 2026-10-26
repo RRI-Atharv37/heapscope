@@ -19,9 +19,15 @@ add_link_options(/DEBUG /INCREMENTAL:NO)
 # Dynamic CRT by default. HeapScope hooks the ntdll heap layer, so a static CRT (/MT) is also covered.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
-foreach(sample basic-alloc leak growth custom-pool churn multithread)
+foreach(sample basic-alloc leak growth custom-pool churn multithread thread-churn heap-exception)
   add_executable(${sample} ${sample}/main.cpp)
 endforeach()
+
+# A DLL whose static destructor frees a block during process shutdown.
+add_library(dll-statics-lib SHARED dll-statics/lib.cpp)
+set_target_properties(dll-statics-lib PROPERTIES OUTPUT_NAME dll_statics_lib)
+add_executable(dll-statics dll-statics/main.cpp)
+target_link_libraries(dll-statics PRIVATE dll-statics-lib)
 
 # Plain C: proves include/heapscope/heapscope.h compiles as C and works from several threads.
 add_executable(header-c header-c/main.c)
