@@ -36,7 +36,7 @@ pub unsafe extern "C" fn heapscope_on_free(ptr: *mut c_void, _pool: *const c_voi
     }
     if let Some(tb) = enter() {
         let err = GetLastError();
-        record_free(tb, ptr as u64, clock::now_ns());
+        record_free(tb, ptr as u64, KIND_POOL, clock::now_ns());
         SetLastError(err);
         leave(tb);
     }

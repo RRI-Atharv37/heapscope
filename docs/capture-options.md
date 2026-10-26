@@ -92,6 +92,13 @@ Frames recorded per call stack, 1 to 64 (default 32). Deeper stacks cost more pe
 - The `run`/`attach` summary line reads from the DLL's counters, so it is correct even if the target
   was killed before the trace was closed.
 
+## Private heaps
+
+`HeapDestroy` frees every block of the heap without calling `HeapFree` for each. HeapScope walks the
+heap just before it is destroyed and records a free for every block still allocated, so an arena
+created with `HeapCreate` and released with `HeapDestroy` leaves no leak candidates. (A destroy that
+fails would still have been recorded as freed.)
+
 ## Not captured
 
 Custom pools that never call the heap (see `include/heapscope`), `VirtualAlloc`/`mmap`-style

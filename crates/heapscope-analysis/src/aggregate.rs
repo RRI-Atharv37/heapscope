@@ -36,6 +36,18 @@ impl Hasher for AddrHasher {
 
 type AddrMap<V> = HashMap<u64, V, BuildHasherDefault<AddrHasher>>;
 
+/// Pool objects (the opt-in C API) live in their own address space: slot 0 of a pool can sit at
+/// the very address of the heap chunk that holds the pool. User-mode addresses never use bit 63,
+/// so it tells the two apart inside the one live-set key.
+const POOL_SPACE: u64 = 1 << 63;
+
+fn key(addr: u64, kind: AllocKind) -> u64 {
+    match kind {
+        AllocKind::Pool => addr ^ POOL_SPACE,
+        _ => addr,
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Block {
     size: u64,
@@ -80,8 +92,8 @@ impl Replayer {
         }
     }
 
-    fn release(&mut self, addr: u64, ts: u64, emit: &mut dyn FnMut(Effect)) {
-        match self.live.remove(&addr) {
+    fn release(&mut self, addr: u64, kind: AllocKind, ts: u64, emit: &mut dyn FnMut(Effect)) {
+        match self.live.remove(&key(addr, kind)) {
             Some(b) => {
                 self.bytes -= b.size;
                 self.allocs -= 1;
@@ -112,7 +124,7 @@ impl Replayer {
             ts: op.ts,
             kind,
         };
-        if let Some(old) = self.live.insert(addr, block) {
+        if let Some(old) = self.live.insert(key(addr, kind), block) {
             self.bytes -= old.size;
             self.allocs -= 1;
             let n = &mut self.per_node[old.node as usize];
@@ -161,15 +173,27 @@ impl Replayer {
                     self.acquire(op.addr, op, node, op.alloc_kind, emit);
                 }
             }
-            OpKind::Free => self.release(op.addr, op.ts, emit),
+            OpKind::Free => self.release(op.addr, op.alloc_kind, op.ts, emit),
             OpKind::Realloc => {
-                // A resized block stays the kind of object it was.
-                let kind = self
+                // A resized block stays the kind of object it was. Only heap blocks are
+                // reallocated by the capture, so look in the heap space first.
+                let old = self
                     .live
-                    .get(&op.old_addr)
-                    .map_or(op.alloc_kind, |b| b.kind);
+                    .get(&key(op.old_addr, AllocKind::Heap))
+                    .map(|b| b.kind)
+                    .or_else(|| {
+                        self.live
+                            .get(&key(op.old_addr, AllocKind::Pool))
+                            .map(|b| b.kind)
+                    });
+                let kind = old.unwrap_or(op.alloc_kind);
                 if op.old_addr != 0 {
-                    self.release(op.old_addr, op.ts, emit);
+                    let from = if old == Some(AllocKind::Pool) {
+                        AllocKind::Pool
+                    } else {
+                        AllocKind::Heap
+                    };
+                    self.release(op.old_addr, from, op.ts, emit);
                 }
                 if admit {
                     self.acquire(op.addr, op, node, kind, emit);

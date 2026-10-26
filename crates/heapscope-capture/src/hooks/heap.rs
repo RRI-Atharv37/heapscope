@@ -1,6 +1,7 @@
 //! Inline hooks on the ntdll heap entry points (decision 0001). Every `malloc`, `operator new`,
 //! `HeapAlloc`, `LocalAlloc`, `CoTaskMemAlloc`... of a process ends in one of these three
-//! functions, whatever CRT the program was built with.
+//! functions, whatever CRT the program was built with. `RtlDestroyHeap` is hooked as well: it
+//! releases every block of a private heap without a call to `RtlFreeHeap`.
 //!
 //! Ordering rules (pitfalls 1 and 2): the guard is held across the original call, a free is
 //! logged *before* the real free (the address may be reused by another thread the moment the real
@@ -13,10 +14,18 @@ use core::sync::atomic::{AtomicPtr, Ordering::*};
 use minhook::MinHook;
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+use windows_sys::Win32::System::Memory::{
+    GetProcessHeap, HeapLock, HeapUnlock, HeapWalk, PROCESS_HEAP_ENTRY,
+};
 
 use super::{enter, leave};
 use crate::buffer::{header, ThreadBuf, R_ALLOC, R_FREE, R_REALLOC};
 use crate::{clock, sampling, stack};
+
+// `PROCESS_HEAP_ENTRY.wFlags` bits (winnt.h).
+const PROCESS_HEAP_REGION: u16 = 0x0001;
+const PROCESS_HEAP_UNCOMMITTED_RANGE: u16 = 0x0002;
+const PROCESS_HEAP_ENTRY_BUSY: u16 = 0x0004;
 
 pub const KIND_HEAP: u8 = 0;
 pub const KIND_POOL: u8 = 1;
@@ -24,11 +33,13 @@ pub const KIND_POOL: u8 = 1;
 static ORIG_ALLOC: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static ORIG_REALLOC: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static ORIG_FREE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static ORIG_DESTROY: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static RTL_SIZE_HEAP: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
 type AllocFn = unsafe extern "system" fn(*mut c_void, u32, usize) -> *mut c_void;
 type ReallocFn = unsafe extern "system" fn(*mut c_void, u32, *mut c_void, usize) -> *mut c_void;
 type FreeFn = unsafe extern "system" fn(*mut c_void, u32, *mut c_void) -> u8;
+type DestroyFn = unsafe extern "system" fn(*mut c_void) -> *mut c_void;
 type SizeFn = unsafe extern "system" fn(*mut c_void, u32, *const c_void) -> usize;
 
 extern "C" {
@@ -54,7 +65,7 @@ pub unsafe extern "C" fn hs_on_unwind() {
     super::unpin_guard();
 }
 
-/// Create (but do not enable) the three hooks.
+/// Create (but do not enable) the four hooks.
 pub unsafe fn create() -> bool {
     fn hook(name: &str, detour: *mut c_void, slot: &AtomicPtr<c_void>) -> bool {
         // SAFETY: `detour` has the signature of the function it replaces (see the type aliases).
@@ -84,6 +95,11 @@ pub unsafe fn create() -> bool {
         hk_realloc as ReallocFn as *mut c_void,
         &ORIG_REALLOC,
     ) && hook("RtlFreeHeap", hk_free as FreeFn as *mut c_void, &ORIG_FREE)
+        && hook(
+            "RtlDestroyHeap",
+            hk_destroy as DestroyFn as *mut c_void,
+            &ORIG_DESTROY,
+        )
 }
 
 #[inline(never)]
@@ -106,14 +122,16 @@ pub(crate) unsafe fn record_alloc(tb: &ThreadBuf, addr: u64, size: u64, kind: u8
 }
 
 #[inline(never)]
-pub(crate) unsafe fn record_free(tb: &ThreadBuf, addr: u64, ts: u64) {
+pub(crate) unsafe fn record_free(tb: &ThreadBuf, addr: u64, kind: u8, ts: u64) {
     if !sampling::keep(addr, sampling::one_in()) {
         return;
     }
-    if sampling::min_lifetime_ns() != 0 && sampling::fold_free(tb, ts, addr) {
+    // Only heap allocations are ever held, and a pool object may share its chunk's address:
+    // a pool free must never fold the chunk away.
+    if kind == KIND_HEAP && sampling::min_lifetime_ns() != 0 && sampling::fold_free(tb, ts, addr) {
         return;
     }
-    tb.push(&[header(R_FREE, 3, 0, tb.tid), ts, addr]);
+    tb.push(&[header(R_FREE, 3, kind, tb.tid), ts, addr]);
 }
 
 /// `old == 0` is a plain allocation. `ts` was taken before the real call.
@@ -224,13 +242,52 @@ unsafe extern "system" fn hk_free(heap: *mut c_void, flags: u32, p: *mut c_void)
     let tracked = if p.is_null() { None } else { enter() };
     if let Some(tb) = tracked {
         let err = GetLastError();
-        record_free(tb, p as u64, clock::now_ns());
+        record_free(tb, p as u64, KIND_HEAP, clock::now_ns());
         SetLastError(err);
     }
     let r = match tracked {
         Some(_) => hs_call_free(orig, heap, flags, p),
         None => orig(heap, flags, p),
     };
+    if let Some(tb) = tracked {
+        leave(tb);
+    }
+    r
+}
+
+/// Log a free for every busy block of `heap`, which is about to be destroyed. Runs under the guard,
+/// so the walk cannot recurse into the hooks.
+#[inline(never)]
+unsafe fn record_heap_blocks(tb: &ThreadBuf, heap: *mut c_void) {
+    // The process heap is never destroyed; walking it would only record the whole program as freed.
+    if heap.is_null() || heap == GetProcessHeap() {
+        return;
+    }
+    // A heap created with HEAP_NO_SERIALIZE has no lock: the call fails and the walk goes ahead.
+    let locked = HeapLock(heap) != 0;
+    let mut entry: PROCESS_HEAP_ENTRY = core::mem::zeroed();
+    let ts = clock::now_ns();
+    while HeapWalk(heap, &mut entry) != 0 {
+        let flags = entry.wFlags;
+        let skip = PROCESS_HEAP_REGION | PROCESS_HEAP_UNCOMMITTED_RANGE;
+        if flags & PROCESS_HEAP_ENTRY_BUSY != 0 && flags & skip == 0 {
+            record_free(tb, entry.lpData as u64, KIND_HEAP, ts);
+        }
+    }
+    if locked {
+        HeapUnlock(heap);
+    }
+}
+
+unsafe extern "system" fn hk_destroy(heap: *mut c_void) -> *mut c_void {
+    let orig: DestroyFn = core::mem::transmute(ORIG_DESTROY.load(Relaxed));
+    let tracked = enter();
+    if let Some(tb) = tracked {
+        let err = GetLastError();
+        record_heap_blocks(tb, heap);
+        SetLastError(err);
+    }
+    let r = orig(heap);
     if let Some(tb) = tracked {
         leave(tb);
     }

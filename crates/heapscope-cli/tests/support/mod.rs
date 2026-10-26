@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use heapscope_trace::{ChurnSummary, Event, Footer, Header, StackId, StackTable, TraceReader};
+use heapscope_trace::{
+    AllocKind, ChurnSummary, Event, Footer, Header, StackId, StackTable, TraceReader,
+};
 
 pub fn heapscope() -> Command {
     Command::new(env!("CARGO_BIN_EXE_heapscope"))
@@ -125,6 +127,8 @@ pub struct Replay {
     pub events: Vec<Event>,
     /// Blocks still allocated at the end of the trace.
     pub live: HashMap<u64, Block>,
+    /// Pool objects still allocated at the end of the trace (their own address space).
+    pub pool_live: HashMap<u64, Block>,
     /// Allocations ever recorded, per stack.
     pub allocated: HashMap<StackId, Totals>,
     pub churn: HashMap<StackId, ChurnSummary>,
@@ -137,6 +141,7 @@ fn ts_of(e: &Event) -> u64 {
     match e {
         Event::Alloc { ts_ns, .. }
         | Event::Free { ts_ns, .. }
+        | Event::PoolFree { ts_ns, .. }
         | Event::Realloc { ts_ns, .. }
         | Event::Marker { ts_ns, .. }
         | Event::ModuleLoad { ts_ns, .. }
@@ -164,6 +169,7 @@ pub fn replay(path: &Path) -> Replay {
         stacks: reader.stacks().clone(),
         events: Vec::new(),
         live: HashMap::new(),
+        pool_live: HashMap::new(),
         allocated: HashMap::new(),
         churn: HashMap::new(),
         markers: Vec::new(),
@@ -175,7 +181,18 @@ pub fn replay(path: &Path) -> Replay {
             Event::Alloc {
                 addr, size, stack, ..
             } => {
-                r.live.insert(
+                let live = if matches!(
+                    e,
+                    Event::Alloc {
+                        kind: AllocKind::Pool,
+                        ..
+                    }
+                ) {
+                    &mut r.pool_live
+                } else {
+                    &mut r.live
+                };
+                live.insert(
                     *addr,
                     Block {
                         size: *size,
@@ -188,6 +205,11 @@ pub fn replay(path: &Path) -> Replay {
             }
             Event::Free { addr, .. } => {
                 if r.live.remove(addr).is_none() {
+                    r.frees_without_alloc += 1;
+                }
+            }
+            Event::PoolFree { addr, .. } => {
+                if r.pool_live.remove(addr).is_none() {
                     r.frees_without_alloc += 1;
                 }
             }
@@ -247,7 +269,8 @@ impl Replay {
 
     pub fn live_at(&self, stack: StackId) -> Totals {
         let mut t = Totals::default();
-        for b in self.live.values().filter(|b| b.stack == stack) {
+        let all = self.live.values().chain(self.pool_live.values());
+        for b in all.filter(|b| b.stack == stack) {
             t.allocs += 1;
             t.bytes += b.size;
         }

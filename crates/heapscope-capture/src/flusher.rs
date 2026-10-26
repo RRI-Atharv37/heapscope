@@ -203,15 +203,22 @@ impl Sink {
                 self.batch.push((rec[1], ev));
             }
             R_FREE if rec.len() >= 3 => {
-                self.batch.push((
-                    rec[1],
+                let ev = if extra == 1 {
+                    Event::PoolFree {
+                        ts_ns: rec[1],
+                        thread: tid,
+                        addr: rec[2],
+                        stack: NO_STACK,
+                    }
+                } else {
                     Event::Free {
                         ts_ns: rec[1],
                         thread: tid,
                         addr: rec[2],
                         stack: NO_STACK,
-                    },
-                ));
+                    }
+                };
+                self.batch.push((rec[1], ev));
             }
             R_REALLOC if rec.len() >= 8 => {
                 let ev = Event::Realloc {

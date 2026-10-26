@@ -116,6 +116,14 @@ pub enum Event {
         addr: u64,
         stack: StackId,
     },
+    /// A free of a pool object (`AllocKind::Pool`). Pool objects live in their own address
+    /// space: one may sit at the address of the heap block that contains it. (Format 1.1.)
+    PoolFree {
+        ts_ns: u64,
+        thread: u32,
+        addr: u64,
+        stack: StackId,
+    },
     Realloc {
         ts_ns: u64,
         thread: u32,
@@ -181,6 +189,7 @@ const TAG_THREAD_NAME: u8 = 7;
 const TAG_CHURN: u8 = 8;
 const TAG_HANDLE_OPEN: u8 = 9;
 const TAG_HANDLE_CLOSE: u8 = 10;
+const TAG_POOL_FREE: u8 = 11;
 
 #[derive(Default)]
 pub(crate) struct EventEncoder {
@@ -228,6 +237,16 @@ impl EventEncoder {
                 stack,
             } => {
                 self.head(buf, TAG_FREE, *ts_ns, Some(*thread));
+                self.addr(buf, *addr);
+                put_u64(buf, u64::from(*stack));
+            }
+            Event::PoolFree {
+                ts_ns,
+                thread,
+                addr,
+                stack,
+            } => {
+                self.head(buf, TAG_POOL_FREE, *ts_ns, Some(*thread));
                 self.addr(buf, *addr);
                 put_u64(buf, u64::from(*stack));
             }
@@ -375,6 +394,15 @@ impl EventDecoder {
             TAG_FREE => {
                 let addr = self.addr(d)?;
                 Event::Free {
+                    ts_ns,
+                    thread,
+                    addr,
+                    stack: d.u32()?,
+                }
+            }
+            TAG_POOL_FREE => {
+                let addr = self.addr(d)?;
+                Event::PoolFree {
                     ts_ns,
                     thread,
                     addr,

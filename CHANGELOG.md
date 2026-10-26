@@ -16,6 +16,12 @@ First beta, for the founding users.
 - An exception raised out of a heap call (`HEAP_GENERATE_EXCEPTIONS`) no longer stops recording on that thread.
 - After `attach` ends, the per-thread capture buffers are released instead of staying committed.
 - Module paths longer than 260 characters are kept in full, and dropped module events are counted.
+- Blocks of a private heap that the program releases with `HeapDestroy` are recorded as freed, so
+  they no longer show up as leaks or inflate the peak.
+- A pool object reported through the C API can no longer displace the heap block that holds it
+  (slot 0 of a pool sits at its backing block's address): the block stays live until it is freed,
+  and its pool objects are counted on top of it. The trace format is now 1.1 (a `PoolFree` event);
+  1.0 traces still read as before.
 
 ### Analysis
 - `heapscope analyze`: totals, peak, top allocation sites with source lines, and leak candidates

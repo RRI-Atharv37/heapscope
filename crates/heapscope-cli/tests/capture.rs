@@ -451,7 +451,7 @@ fn custom_pool_opt_in_shows_each_pool_object_with_its_call_path_and_markers() {
     let (r, expected_path, _) = run_sample(&dir, "custom-pool", "pool-optin", &[], &[]);
     assert_matches_expected(&r, &read_expected(&expected_path));
     let leak = r
-        .live
+        .pool_live
         .values()
         .find(|b| b.size == 64)
         .expect("pool_leak_site block")
@@ -482,10 +482,13 @@ fn header_compiles_as_c_and_macros_work_from_racing_threads() {
     let pool = r.site_of_size(48, 10).expect("pool_user_c allocations");
     assert_eq!((r.live_at(pool).allocs, r.live_at(pool).bytes), (5, 240));
     // The resize: old block freed, one 96-byte block live.
-    let resized: Vec<_> = r.live.values().filter(|b| b.size == 96).collect();
+    let resized: Vec<_> = r.pool_live.values().filter(|b| b.size == 96).collect();
     assert_eq!(resized.len(), 1);
     assert!(r.stack_reaches_module(resized[0].stack, "header-c.exe"));
-    let live_of = |size| r.live.values().filter(|b| b.size == size).count();
+    let live_of = |size| {
+        let all = r.live.values().chain(r.pool_live.values());
+        all.filter(|b| b.size == size).count()
+    };
     // The CRT keeps a few live blocks of its own, so these are lower bounds (the exact counts per
     // call site are asserted above).
     assert!(live_of(32) >= 400 && live_of(48) >= 5);

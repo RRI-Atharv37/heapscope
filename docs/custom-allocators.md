@@ -62,7 +62,12 @@ objects `pool_leak_site` never releases are listed as live at exit.
   unit, safe from any thread). They can stay in release builds.
 - The macros obey the same rules as the heap hooks: `--sample` and `--min-lifetime` apply, and a call
   made from inside a hook is ignored.
-- Pointers must be unique while live. Report the pointer the caller receives, not an internal one.
+- Pointers must be unique among live pool objects. Report the pointer the caller receives, not an
+  internal one. A pool object may sit at the address of the heap block that holds the pool (slot 0
+  of a fixed pool): the two are tracked apart, a pool free never touches the block, and the block
+  stays live until it is freed. Pool bytes are added on top of the bytes of the block that holds
+  them, so `peak` and live totals count that memory twice; the call tree shows the block under the
+  pool's own allocation site and each object under the site that allocated it.
 - The macros are no-ops on platforms other than Windows (HeapScope captures on Windows only for now).
 - `HEAPSCOPE_REALLOC` is recorded as a free of the old pointer followed by an allocation of the new
   one, so an object that is resized in place shows up as a new allocation at the resize site.

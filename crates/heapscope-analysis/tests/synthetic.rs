@@ -165,6 +165,54 @@ fn untrimmed_analysis_keeps_every_frame() {
     assert_eq!(a.tree.node(leaf).frame.name, "malloc_base");
 }
 
+fn pool(ts_ns: u64, addr: u64, size: u64, stack: StackId) -> Event {
+    Event::Alloc {
+        ts_ns,
+        thread: 1,
+        kind: AllocKind::Pool,
+        addr,
+        size,
+        requested: size,
+        stack,
+    }
+}
+
+fn pool_free(ts_ns: u64, addr: u64) -> Event {
+    Event::PoolFree {
+        ts_ns,
+        thread: 1,
+        addr,
+        stack: 0,
+    }
+}
+
+/// A pool object may sit at the address of the heap chunk that contains it (slot 0 of a fixed
+/// pool). The two are different objects: the chunk's free must not remove the leaked slot, and
+/// the slot's allocation must not replace the chunk.
+#[test]
+fn pool_object_at_its_chunk_address_is_a_separate_live_object() {
+    let t = build(
+        &header(),
+        &[
+            alloc(10, 1, 0x10000, 65_536, 1),
+            pool(20, 0x10000, 64, 2),
+            pool(30, 0x10040, 100, 2),
+            pool_free(40, 0x10040),
+            free(50, 0x10000),
+        ],
+    );
+    let a = run(&t, &Options::default());
+    assert_eq!(a.totals.missed_frees, 0);
+    assert_eq!(a.totals.unmatched_frees, 0);
+    assert_eq!(
+        (a.peak.ts_ns, a.peak.live_bytes, a.peak.live_allocs),
+        (30, 65_536 + 64 + 100, 3)
+    );
+    let r = heapscope_analysis::leaks::detect(&a, &heapscope_analysis::Suppressions::none());
+    assert_eq!(r.entries.len(), 1, "{:?}", r.entries);
+    assert_eq!((r.entries[0].allocs, r.entries[0].bytes), (1, 64));
+}
+
 #[test]
 fn peak_is_found_with_its_live_set() {
     let t = build(

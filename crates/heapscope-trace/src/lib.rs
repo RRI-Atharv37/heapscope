@@ -25,7 +25,7 @@ pub const MAGIC: [u8; 8] = *b"HSTRACE\0";
 /// Bumped for any change an older reader cannot skip (new event tags, new chunk layouts).
 pub const FORMAT_MAJOR: u16 = 1;
 /// Bumped for compatible additions (fields appended to the header chunk).
-pub const FORMAT_MINOR: u16 = 0;
+pub const FORMAT_MINOR: u16 = 1;
 
 /// Upper bound for one chunk, so a corrupt length cannot trigger a huge allocation.
 pub(crate) const MAX_CHUNK_BYTES: u32 = 64 << 20;

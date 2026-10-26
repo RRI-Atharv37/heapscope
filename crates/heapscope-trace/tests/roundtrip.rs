@@ -203,7 +203,7 @@ fn every_event_kind_roundtrips() {
     let (r, read) = read_all(&written.bytes);
     assert_eq!(read, written.events);
     assert_eq!(r.header(), &header());
-    assert_eq!(r.version(), (FORMAT_MAJOR, 0));
+    assert_eq!(r.version(), (FORMAT_MAJOR, heapscope_trace::FORMAT_MINOR));
     assert_eq!(r.stacks().len(), 2);
     assert_eq!(r.stacks().get(1).unwrap(), written.stacks[0].as_slice());
     assert_eq!(r.stacks().get(2).unwrap(), written.stacks[1].as_slice());
@@ -386,6 +386,29 @@ fn footer_count_mismatch_is_detected() {
     let mut r = TraceReader::new(franken.as_slice()).unwrap();
     let outcome: Result<Vec<_>, _> = r.by_ref().collect();
     assert!(matches!(outcome, Err(Error::Corrupt(_))), "{outcome:?}");
+}
+
+/// Format 1.1: a free of a pool object is its own event, so it never matches a heap block.
+#[test]
+fn pool_free_roundtrips_next_to_a_heap_free_at_the_same_address() {
+    let (stacks, _) = one_of_each();
+    let events = vec![
+        Event::PoolFree {
+            ts_ns: 30,
+            thread: 2,
+            addr: 0x1f00_0000_0800,
+            stack: NO_STACK,
+        },
+        Event::Free {
+            ts_ns: 31,
+            thread: 2,
+            addr: 0x1f00_0000_0800,
+            stack: NO_STACK,
+        },
+    ];
+    let written = write_trace(&header(), &stacks, &events, Dropped::default());
+    let (_, read) = read_all(&written.bytes);
+    assert_eq!(read, events);
 }
 
 #[test]

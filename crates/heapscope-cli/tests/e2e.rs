@@ -226,6 +226,39 @@ fn churn_sample_matches_its_ground_truth_and_reports_the_churn_site() {
 #[test]
 fn custom_pool_sample_matches_its_ground_truth() {
     run_ground_truth("custom-pool", true);
+    let Some(dir) = samples_dir() else { return };
+    let (summary, _) = summarise(&dir, "custom-pool");
+    // The pool objects live inside the 64 KiB chunk, slot 0 at the chunk's own address: neither
+    // may replace the other in the live set, so the chunk is still there to be freed at the end.
+    let chunk: Vec<&Json> = summary
+        .get("sites")
+        .and_then(Json::as_array)
+        .unwrap()
+        .iter()
+        .filter(|s| num(s, "alloc_bytes") == 65_536)
+        .collect();
+    assert_eq!(chunk.len(), 1, "the pool's backing block");
+    assert_eq!((num(chunk[0], "allocs"), num(chunk[0], "frees")), (1, 1));
+    let peak = num(summary.get("peak").unwrap(), "live_bytes");
+    assert!(
+        peak >= 65_536 + 50 * 64,
+        "chunk and pool objects together: {peak}"
+    );
+}
+
+#[test]
+fn private_heap_sample_has_no_leak_after_heap_destroy() {
+    run_ground_truth("private-heap", false);
+    let Some(dir) = samples_dir() else { return };
+    let (summary, _) = summarise(&dir, "private-heap");
+    let leaks = summary.get("leaks").unwrap();
+    let entries = leaks.get("entries").and_then(Json::as_array).unwrap();
+    assert!(
+        !entries
+            .iter()
+            .any(|e| e.get("function").and_then(Json::as_str) == Some("arena_site")),
+        "blocks of a destroyed heap are still reported live"
+    );
 }
 
 #[test]

@@ -148,6 +148,21 @@ impl Trace {
                 stack,
                 alloc_kind: AllocKind::Heap,
             }),
+            Event::PoolFree {
+                ts_ns,
+                thread,
+                addr,
+                stack,
+            } => self.ops.push(Op {
+                ts: ts_ns,
+                kind: OpKind::Free,
+                thread,
+                addr,
+                old_addr: 0,
+                size: 0,
+                stack,
+                alloc_kind: AllocKind::Pool,
+            }),
             Event::Realloc {
                 ts_ns,
                 thread,

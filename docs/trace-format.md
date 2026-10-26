@@ -1,4 +1,4 @@
-# HeapScope trace format (`.hstrace`), version 1.0
+# HeapScope trace format (`.hstrace`), version 1.1
 
 A trace is a stream of CRC-checked chunks. The reference implementation is the
 [`heapscope-trace`](../crates/heapscope-trace) crate (GPL-3.0). Anyone may write a reader or writer
@@ -13,13 +13,15 @@ byte length followed by UTF-8 bytes.
 ```
 magic        8 bytes   "HSTRACE\0"
 major        u16       1
-minor        u16       0
+minor        u16       1
 chunk...               header chunk, then stacks/events chunks in any order, then a footer chunk
 ```
 
 A reader must refuse a file whose `major` differs from the one it supports. A higher `minor` with
 the same `major` must be readable: minor versions only append fields at the end of the header
-chunk, which readers ignore. New event tags or new chunk types require a new `major`.
+chunk, which readers ignore. A new chunk type requires a new `major`. A new event tag may be added in
+a minor version only for events a writer produces only when the program needs them; a reader that
+predates the tag stops at it as at any unknown tag. History: 1.1 added tag 11.
 
 ## Chunk frame (14 bytes + payload)
 
@@ -73,6 +75,12 @@ zigzag deltas from the previous address-carrying field. Events need not be in ti
 | 8 | ChurnSummary | (no thread) `stack` · `allocs` · `bytes` · `total_lifetime_ns` · `max_concurrent`, all varints |
 | 9 | HandleOpen | `handle` varint · `kind` u8 (0 file, 1 key, 2 event, 3 mutant, 4 semaphore, 5 section, 6 pipe, other values kept as is) · `stack` |
 | 10 | HandleClose | `handle` varint · `stack` |
+| 11 | PoolFree | `addr` · `stack` (1.1) |
+
+A **PoolFree** frees an Alloc of kind 1 (pool); a plain Free frees an Alloc of kind 0 or 2. Pool
+objects live in their own address space: slot 0 of a pool can sit at the very address of the heap
+block that holds the pool, so the two must not be matched by address alone. A trace without pool
+allocations never contains a PoolFree.
 
 `requested` is the size the program asked for; `size` is what the allocator reserved. They differ
 under the Debug CRT, which adds guard bytes. HandleOpen/HandleClose are reserved for optional
