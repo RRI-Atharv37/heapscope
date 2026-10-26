@@ -8,7 +8,7 @@ use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
 
 use super::absolute_output;
-use crate::launch::{self, CaptureOptions, Control};
+use crate::launch::{self, CaptureOptions, Control, KillOnClose};
 
 pub struct RunArgs {
     pub output: PathBuf,
@@ -19,6 +19,7 @@ pub struct RunArgs {
 }
 
 pub fn run(args: RunArgs) -> Result<ExitCode, String> {
+    let exe = launch::resolve_program(&args.program[0])?;
     let dll = launch::dll_path()?;
     let opts = CaptureOptions {
         output: absolute_output(&args.output)?,
@@ -27,22 +28,24 @@ pub fn run(args: RunArgs) -> Result<ExitCode, String> {
         stack_depth: args.stack_depth,
         attached: false,
     };
-    let mut program = args.program;
-    // A path (as opposed to a bare name to be found on PATH) is made absolute, which also turns
-    // forward slashes into the backslashes CreateProcess expects.
-    if program[0].contains(['/', '\\']) {
-        if let Ok(full) = std::path::absolute(&program[0]) {
-            if full.is_file() {
-                program[0] = full.to_string_lossy().into_owned();
-            }
-        }
+    // Ctrl-C reaches the whole console group; let the target decide, and keep waiting for it so the
+    // trace is finalised. Set before the child exists, so no window remains in which Ctrl-C ends
+    // this process between creating the child and finishing the injection.
+    // SAFETY: documented way to ignore Ctrl-C in this process.
+    unsafe { SetConsoleCtrlHandler(None, 1) };
+
+    // If this process dies in any other way (closed console, kill), the job takes the child along
+    // instead of leaving it suspended or captured with nobody listening.
+    let job = KillOnClose::new();
+    let child = launch::spawn_suspended(&exe, &args.program)?;
+    if let Some(job) = &job {
+        job.add(child.process.as_raw_handle() as HANDLE);
     }
-    let child = launch::spawn_suspended(&program)?;
     let started = (|| {
         let ctl = Control::create(child.pid, &opts)?;
-        launch::inject(child.process.as_raw_handle() as HANDLE, &dll)
+        let injected = launch::inject(child.process.as_raw_handle() as HANDLE, &dll)
             .map_err(|e| ctl.explain(e))?;
-        launch::require_capturing(&ctl)?;
+        launch::require_capturing(&ctl, injected)?;
         Ok::<_, String>(ctl)
     })();
     let ctl = match started {
@@ -52,13 +55,12 @@ pub fn run(args: RunArgs) -> Result<ExitCode, String> {
             return Err(e);
         }
     };
-    // Ctrl-C reaches the whole console group; let the target decide, and keep waiting for it so the
-    // trace is finalised.
-    // SAFETY: documented way to ignore Ctrl-C in this process.
-    unsafe { SetConsoleCtrlHandler(None, 1) };
     child.resume();
     let code = child.wait();
-    eprintln!("heapscope: {}", launch::summary(&ctl, &opts.output));
+    if let Some(job) = &job {
+        job.disarm();
+    }
+    say_err!("heapscope: {}", launch::summary(&ctl, &opts.output));
     // Exit codes above 255 (NTSTATUS crashes) cannot be passed through; report them as failure.
     Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
 }

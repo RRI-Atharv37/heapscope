@@ -45,6 +45,29 @@ unsafe fn from_wide(p: *const u16) -> String {
     }
 }
 
+/// Whether DbgHelp may open `path`. The path comes from the trace, which may not be ours: a UNC or
+/// device path would make Windows contact another machine (SMB, NTLM) or open a device, so only
+/// `X:\dir\file` on a local drive is accepted, with no `..` and no alternate stream.
+pub(crate) fn is_local_image_path(path: &str) -> bool {
+    let b = path.as_bytes();
+    let shape = b.len() >= 4
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && b[2] == b'\\'
+        && !path[2..].contains(':')
+        && !path.contains(['/', '\0', '?', '*'])
+        && !path.split('\\').any(|c| c == "..");
+    shape && !is_remote_drive(b[0])
+}
+
+fn is_remote_drive(letter: u8) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+    const DRIVE_REMOTE: u32 = 4;
+    let root = [u16::from(letter), u16::from(b':'), u16::from(b'\\'), 0];
+    // SAFETY: `root` is a NUL-terminated UTF-16 string.
+    unsafe { GetDriveTypeW(root.as_ptr()) == DRIVE_REMOTE }
+}
+
 impl Session {
     pub(crate) fn new(search_path: Option<&str>) -> Self {
         let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed) as *mut c_void;
@@ -73,6 +96,9 @@ impl Session {
 
     fn ensure_loaded(&mut self, m: &ModuleInfo) {
         if !self.loaded.insert(m.base) {
+            return;
+        }
+        if !is_local_image_path(&m.path) {
             return;
         }
         let image = wide(&m.path);
@@ -140,6 +166,31 @@ impl Drop for Session {
         if self.ok {
             // SAFETY: the session was initialised by `new`.
             unsafe { SymCleanup(self.handle) };
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_local_image_path;
+
+    #[test]
+    fn only_plain_local_drive_paths_are_opened() {
+        assert!(is_local_image_path(r"C:\Windows\System32\ntdll.dll"));
+        for bad in [
+            r"\attacker\share\x.dll",
+            r"\?\UNC\attacker\share\x.dll",
+            r"\?\C:\x.dll",
+            r"\.\PhysicalDrive0",
+            r"C:\..\x.dll",
+            r"C:\a\..\..\x.dll",
+            r"C:\x.dll:stream",
+            "C:/x.dll",
+            "x.dll",
+            "C:x.dll",
+            "",
+        ] {
+            assert!(!is_local_image_path(bad), "{bad}");
         }
     }
 }

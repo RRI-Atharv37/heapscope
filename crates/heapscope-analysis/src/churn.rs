@@ -19,19 +19,19 @@ pub(crate) fn merge_summaries<'a>(
     for s in summaries {
         let i = node_of.get(s.stack as usize).copied().unwrap_or(node_of[0]) as usize;
         let st = &mut stats[i];
-        st.allocs += s.allocs;
-        st.alloc_bytes += s.bytes;
-        st.frees += s.allocs;
-        st.freed_bytes += s.bytes;
-        st.lifetime_ns += s.total_lifetime_ns;
-        st.short_allocs += s.allocs;
-        st.short_bytes += s.bytes;
-        st.short_lifetime_ns += s.total_lifetime_ns;
+        st.allocs = st.allocs.saturating_add(s.allocs);
+        st.alloc_bytes = st.alloc_bytes.saturating_add(s.bytes);
+        st.frees = st.frees.saturating_add(s.allocs);
+        st.freed_bytes = st.freed_bytes.saturating_add(s.bytes);
+        st.lifetime_ns = st.lifetime_ns.saturating_add(s.total_lifetime_ns);
+        st.short_allocs = st.short_allocs.saturating_add(s.allocs);
+        st.short_bytes = st.short_bytes.saturating_add(s.bytes);
+        st.short_lifetime_ns = st.short_lifetime_ns.saturating_add(s.total_lifetime_ns);
         st.max_concurrent = st.max_concurrent.max(s.max_concurrent);
-        totals.allocs += s.allocs;
-        totals.alloc_bytes += s.bytes;
-        totals.frees += s.allocs;
-        totals.freed_bytes += s.bytes;
+        totals.allocs = totals.allocs.saturating_add(s.allocs);
+        totals.alloc_bytes = totals.alloc_bytes.saturating_add(s.bytes);
+        totals.frees = totals.frees.saturating_add(s.allocs);
+        totals.freed_bytes = totals.freed_bytes.saturating_add(s.bytes);
     }
 }
 

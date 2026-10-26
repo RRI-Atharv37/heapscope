@@ -121,6 +121,7 @@ impl Control {
         ctl.min_lifetime_ms.store(opts.min_lifetime_ms, Relaxed);
         ctl.stack_depth.store(opts.stack_depth, Relaxed);
         ctl.attached.store(u32::from(opts.attached), Relaxed);
+        ctl.controller_pid.store(std::process::id(), Relaxed);
         // `HEAPSCOPE_TEST_CONTROL_VERSION` exists for the tests: it plays a CLI of another build,
         // to check what the user is told when the DLL does not match.
         let version = std::env::var("HEAPSCOPE_TEST_CONTROL_VERSION")
@@ -152,6 +153,9 @@ impl Control {
                 self.version.load(Relaxed)
             );
         }
+        if kind == error::WRITE_FAILED {
+            return "writing the trace failed (disk full?); the trace is incomplete".into();
+        }
         let what = match kind {
             error::BAD_CONTROL_BLOCK => "the control block was unreadable",
             error::OPEN_OUTPUT => {
@@ -161,7 +165,10 @@ impl Control {
             error::HOOK_INSTALL => "the heap hooks could not be installed",
             error::OUT_OF_MEMORY => "no thread-local storage slots or memory were available",
             error::START_THREAD => "the flush thread could not be started",
-            error::WRITE_FAILED => "writing the trace failed (disk full?)",
+            error::WRITE_FAILED => "writing the trace failed",
+            error::OUTPUT_IN_USE => {
+                "another capture is writing to that trace file (use a different -o)"
+            }
             _ => {
                 "it did not start (the DLL may have been blocked by antivirus or Smart App Control)"
             }
@@ -236,6 +243,117 @@ pub fn quote_arg(arg: &str) -> String {
     out
 }
 
+/// The executable `name` stands for. A name with a directory is taken as it is (made absolute); a
+/// bare name is looked up in the absolute directories of `PATH` only, never in the current
+/// directory, which `CreateProcess` would search first. A missing extension means `.exe`.
+/// Batch files and scripts are refused: they would run `cmd.exe`, which reinterprets `& | ^ %` in
+/// the arguments, and the process HeapScope would profile is `cmd.exe`, not the program.
+pub fn resolve_program(name: &str) -> Result<PathBuf, String> {
+    let not_found = || {
+        format!(
+            "cannot start '{name}': not found{}",
+            if name.contains(['/', '\\']) {
+                ""
+            } else {
+                " on PATH (the current directory is not searched; use .\\name.exe to run a program here)"
+            }
+        )
+    };
+    let with_extension = |p: PathBuf| -> Option<PathBuf> {
+        if p.extension().is_some() {
+            return p.is_file().then_some(p);
+        }
+        let exe = p.with_extension("exe");
+        exe.is_file().then_some(exe)
+    };
+    let found = if name.contains(['/', '\\']) || name.contains(':') {
+        let full = std::path::absolute(name).map_err(|_| not_found())?;
+        with_extension(full)
+    } else {
+        std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .filter(|d| d.is_absolute())
+                .find_map(|d| with_extension(d.join(name)))
+        })
+    };
+    let path = found.ok_or_else(not_found)?;
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if ext != "exe" && ext != "com" {
+        return Err(format!(
+            "cannot start '{}': HeapScope profiles native programs (.exe), not {}scripts; \
+             name the .exe the script starts instead",
+            path.display(),
+            if ext == "bat" || ext == "cmd" {
+                "batch "
+            } else {
+                ""
+            }
+        ));
+    }
+    Ok(path)
+}
+
+/// Kills everything in it when the last handle closes, so a CLI that is killed or crashes does not
+/// leave a suspended or captured child behind.
+pub struct KillOnClose(OwnedHandle);
+
+impl KillOnClose {
+    pub fn new() -> Option<Self> {
+        use windows_sys::Win32::System::JobObjects::{
+            CreateJobObjectW, JobObjectExtendedLimitInformation,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        // SAFETY: plain Win32 calls; the zeroed limit structure is a valid initial value.
+        unsafe {
+            let job = CreateJobObjectW(null(), null());
+            if job.is_null() {
+                return None;
+            }
+            let job = OwnedHandle::from_raw_handle(job as _);
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = windows_sys::Win32::System::JobObjects::SetInformationJobObject(
+                job.as_raw_handle() as HANDLE,
+                JobObjectExtendedLimitInformation,
+                (&raw const info).cast(),
+                std::mem::size_of_val(&info) as u32,
+            );
+            (ok != 0).then_some(Self(job))
+        }
+    }
+
+    pub fn add(&self, process: HANDLE) -> bool {
+        // SAFETY: both handles are valid. Fails if the process is in a job that forbids nesting.
+        unsafe {
+            windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(
+                self.0.as_raw_handle() as HANDLE,
+                process,
+            ) != 0
+        }
+    }
+
+    /// Normal end: let anything the target left running keep running.
+    pub fn disarm(&self) {
+        use windows_sys::Win32::System::JobObjects::{
+            JobObjectExtendedLimitInformation, SetInformationJobObject,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        };
+        // SAFETY: as in `new`.
+        unsafe {
+            let info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            SetInformationJobObject(
+                self.0.as_raw_handle() as HANDLE,
+                JobObjectExtendedLimitInformation,
+                (&raw const info).cast(),
+                std::mem::size_of_val(&info) as u32,
+            );
+        }
+    }
+}
+
 /// A process created suspended; resumed explicitly.
 pub struct Child {
     pub process: OwnedHandle,
@@ -243,21 +361,25 @@ pub struct Child {
     pub pid: u32,
 }
 
-pub fn spawn_suspended(program: &[String]) -> Result<Child, String> {
+/// Create `program[0]` (already resolved to a full path) suspended, with the rest as arguments.
+pub fn spawn_suspended(exe: &Path, program: &[String]) -> Result<Child, String> {
+    let mut args = vec![exe.to_string_lossy().into_owned()];
+    args.extend(program.iter().skip(1).cloned());
     let mut cmdline = wide(OsStr::new(
-        &program
+        &args
             .iter()
             .map(|a| quote_arg(a))
             .collect::<Vec<_>>()
             .join(" "),
     ));
+    let application = wide(exe.as_os_str());
     // SAFETY: zeroed STARTUPINFOW/PROCESS_INFORMATION are valid initial values; `cmdline` is mutable and NUL-terminated.
     unsafe {
         let mut si: STARTUPINFOW = std::mem::zeroed();
         si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
         let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
         if CreateProcessW(
-            null(),
+            application.as_ptr(),
             cmdline.as_mut_ptr(),
             null(),
             null(),
@@ -307,9 +429,20 @@ impl Child {
     }
 }
 
-/// Make `process` load `dll` by running `LoadLibraryW` in a remote thread. `DllMain` has finished
-/// when this returns `Ok`; whether capture really started is in the control block.
-pub fn inject(process: HANDLE, dll: &Path) -> Result<(), String> {
+/// What the remote `LoadLibraryW` thread did. Whether capture really started is decided by the
+/// control block, not by this: the thread's 32-bit exit code is only the low half of an `HMODULE`
+/// (a legitimate base can have zero there), and a slow loader can outlast the wait.
+#[derive(Clone, Copy)]
+pub struct Injected {
+    /// The thread ended (as opposed to still running when we stopped waiting).
+    pub finished: bool,
+    /// `LoadLibraryW` returned something non-zero in its low 32 bits.
+    pub returned_module: bool,
+}
+
+/// Make `process` load `dll` by running `LoadLibraryW` in a remote thread. Returns once the thread
+/// ended or after 30 seconds; the caller then asks [`require_capturing`].
+pub fn inject(process: HANDLE, dll: &Path) -> Result<Injected, String> {
     let path = wide(dll.as_os_str());
     let bytes = path.len() * 2;
     // SAFETY: remote allocation and thread creation on a process handle with the needed rights; the
@@ -367,26 +500,51 @@ pub fn inject(process: HANDLE, dll: &Path) -> Result<(), String> {
         CloseHandle(thread);
         if waited != WAIT_OBJECT_0 {
             // The loader may still be running in the target; leave the buffer alone.
-            return Err(
-                "the target did not finish loading the capture DLL within 30 seconds".into(),
-            );
+            return Ok(Injected {
+                finished: false,
+                returned_module: false,
+            });
         }
         free(remote);
-        if loaded == 0 {
-            return Err("LoadLibrary failed in the target".into());
-        }
+        Ok(Injected {
+            finished: true,
+            returned_module: loaded != 0,
+        })
     }
-    Ok(())
 }
 
-/// Wait until the DLL reports `CAPTURING`, or fail with the reason it gave.
-pub fn require_capturing(ctl: &Control) -> Result<(), String> {
-    for _ in 0..200 {
+/// Wait until the DLL reports `CAPTURING`, or fail with the reason it gave. The control block is
+/// the judge: a thread that finished with a null result may be a truncated `HMODULE`.
+pub fn require_capturing(ctl: &Control, injected: Injected) -> Result<(), String> {
+    // A finished load that returned nothing gets a short grace period; a loader that is still
+    // running (antivirus scanning the DLL, say) gets the time it asked for.
+    let polls = if injected.finished && !injected.returned_module {
+        100
+    } else if injected.finished {
+        500
+    } else {
+        3000
+    };
+    for _ in 0..polls {
         match ctl.state.load(Acquire) {
             state::CAPTURING => return Ok(()),
             state::FAILED => return Err(ctl.failure_reason()),
             _ => std::thread::sleep(Duration::from_millis(10)),
         }
+    }
+    if !injected.finished {
+        return Err(
+            "the target did not finish loading the capture DLL within 30 seconds, and the DLL \
+             never reported in"
+                .into(),
+        );
+    }
+    if !injected.returned_module {
+        return Err(
+            "LoadLibrary failed in the target: the DLL could not be loaded (a missing \
+                    dependency, or blocked by antivirus or Smart App Control)"
+                .into(),
+        );
     }
     Err(ctl.failure_reason())
 }
@@ -417,7 +575,11 @@ pub fn summary(ctl: &Control, output: &Path) -> String {
     if overflow > 0 {
         s.push_str(&format!("\n  warning: {overflow} events were lost because the program allocated faster than the trace could be written"));
     }
-    if ctl.footer_written.load(Acquire) == 0 {
+    if ctl.state.load(Acquire) == state::FAILED
+        && split_error(ctl.error_code.load(Relaxed)).0 == error::WRITE_FAILED
+    {
+        s.push_str("\n  warning: writing the trace failed (disk full?); the trace ends where the writing stopped");
+    } else if ctl.footer_written.load(Acquire) == 0 {
         s.push_str("\n  warning: the trace was not closed cleanly (the target was killed or crashed); it is readable up to the last complete block");
     }
     s

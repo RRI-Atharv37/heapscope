@@ -37,6 +37,11 @@ Both lengths are limited to 64 MiB. The LZ4 codec is the raw block format withou
 the raw length is the expected output size. A writer only uses LZ4 when it makes the chunk smaller.
 The writer flushes an events chunk after about 256 KiB of raw events.
 
+The CRC detects damage, not tampering: anyone can write a file with valid checksums. A reader treats a
+trace as untrusted input and caps the whole file, not just each chunk (the reference reader: 2^26
+stacks, 2^27 frames in total, 2^31 events, 1 TiB of decoded data) and reports a file past a cap as
+corrupt. Analysis saturates byte totals at the `u64` maximum and warns instead of wrapping.
+
 ## Header chunk (first chunk, always raw)
 
 `tool_version` string · `pid` varint · `exe_path` string · `command_line` string · `pointer_size` u8

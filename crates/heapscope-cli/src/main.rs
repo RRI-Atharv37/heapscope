@@ -204,7 +204,7 @@ fn main() -> ExitCode {
     match result {
         Ok(code) => code,
         Err(message) => {
-            eprintln!("heapscope: {message}");
+            commands::emit(true, format_args!("heapscope: {message}"));
             ExitCode::from(1)
         }
     }

@@ -83,12 +83,10 @@ pub fn run(args: DiffArgs) -> Result<ExitCode, String> {
         (Some(_), Some(_)) => {
             return Err("--markers compares two points of one trace; give one trace file".into())
         }
-        (None, None) => {
-            return Err(
-                "give a second trace file, or --markers FROM TO to compare two markers of                  one trace"
-                    .into(),
-            )
-        }
+        (None, None) => return Err(
+            "give a second trace file, or --markers FROM TO to compare two markers of one trace"
+                .into(),
+        ),
     };
     print(&d, &title, args.limit);
     if let Some(path) = &args.html {

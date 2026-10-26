@@ -151,8 +151,8 @@ fn by_identity(a: &Analysis, live: &[(NodeId, u64, u64)], depth: usize) -> ByKey
     for &(node, allocs, bytes) in live {
         let key = identity::path_key(&a.tree, node, depth);
         let e = out.entry(key).or_insert((Live::default(), node));
-        e.0.allocs += allocs * scale;
-        e.0.bytes += bytes * scale;
+        e.0.allocs = e.0.allocs.saturating_add(allocs.saturating_mul(scale));
+        e.0.bytes = e.0.bytes.saturating_add(bytes.saturating_mul(scale));
     }
     out
 }
@@ -244,8 +244,14 @@ fn compare(
     });
 
     let total = |live: &[(NodeId, u64, u64)], scale: u64| Live {
-        allocs: live.iter().map(|l| l.1).sum::<u64>() * scale,
-        bytes: live.iter().map(|l| l.2).sum::<u64>() * scale,
+        allocs: live
+            .iter()
+            .fold(0u64, |a, l| a.saturating_add(l.1))
+            .saturating_mul(scale),
+        bytes: live
+            .iter()
+            .fold(0u64, |a, l| a.saturating_add(l.2))
+            .saturating_mul(scale),
     };
 
     let mut notes = Vec::new();

@@ -147,19 +147,19 @@ pub struct PathStats {
 
 impl PathStats {
     pub fn add(&mut self, o: &Self) {
-        self.allocs += o.allocs;
-        self.alloc_bytes += o.alloc_bytes;
-        self.frees += o.frees;
-        self.freed_bytes += o.freed_bytes;
-        self.live_allocs += o.live_allocs;
-        self.live_bytes += o.live_bytes;
-        self.peak_live_allocs += o.peak_live_allocs;
-        self.peak_live_bytes += o.peak_live_bytes;
-        self.lifetime_ns += o.lifetime_ns;
-        self.short_allocs += o.short_allocs;
-        self.short_bytes += o.short_bytes;
-        self.short_lifetime_ns += o.short_lifetime_ns;
-        self.max_concurrent += o.max_concurrent;
+        self.allocs = self.allocs.saturating_add(o.allocs);
+        self.alloc_bytes = self.alloc_bytes.saturating_add(o.alloc_bytes);
+        self.frees = self.frees.saturating_add(o.frees);
+        self.freed_bytes = self.freed_bytes.saturating_add(o.freed_bytes);
+        self.live_allocs = self.live_allocs.saturating_add(o.live_allocs);
+        self.live_bytes = self.live_bytes.saturating_add(o.live_bytes);
+        self.peak_live_allocs = self.peak_live_allocs.saturating_add(o.peak_live_allocs);
+        self.peak_live_bytes = self.peak_live_bytes.saturating_add(o.peak_live_bytes);
+        self.lifetime_ns = self.lifetime_ns.saturating_add(o.lifetime_ns);
+        self.short_allocs = self.short_allocs.saturating_add(o.short_allocs);
+        self.short_bytes = self.short_bytes.saturating_add(o.short_bytes);
+        self.short_lifetime_ns = self.short_lifetime_ns.saturating_add(o.short_lifetime_ns);
+        self.max_concurrent = self.max_concurrent.saturating_add(o.max_concurrent);
     }
 }
 

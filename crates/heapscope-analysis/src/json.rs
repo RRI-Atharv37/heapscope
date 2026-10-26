@@ -498,20 +498,35 @@ pub fn summary(a: &Analysis, leaks: &LeakReport) -> Json {
     let capture = capture(c);
 
     let totals = obj(vec![
-        ("allocs", Json::Uint(t.allocs * scale)),
-        ("alloc_bytes", Json::Uint(t.alloc_bytes * scale)),
-        ("frees", Json::Uint(t.frees * scale)),
-        ("freed_bytes", Json::Uint(t.freed_bytes * scale)),
-        ("live_allocs", Json::Uint(t.live_allocs * scale)),
-        ("live_bytes", Json::Uint(t.live_bytes * scale)),
+        ("allocs", Json::Uint(t.allocs.saturating_mul(scale))),
+        (
+            "alloc_bytes",
+            Json::Uint(t.alloc_bytes.saturating_mul(scale)),
+        ),
+        ("frees", Json::Uint(t.frees.saturating_mul(scale))),
+        (
+            "freed_bytes",
+            Json::Uint(t.freed_bytes.saturating_mul(scale)),
+        ),
+        (
+            "live_allocs",
+            Json::Uint(t.live_allocs.saturating_mul(scale)),
+        ),
+        ("live_bytes", Json::Uint(t.live_bytes.saturating_mul(scale))),
         ("unmatched_frees", Json::Uint(t.unmatched_frees)),
         ("missed_frees", Json::Uint(t.missed_frees)),
     ]);
 
     let peak = obj(vec![
         ("ts_ns", Json::Uint(a.peak.ts_ns)),
-        ("live_bytes", Json::Uint(a.peak.live_bytes * scale)),
-        ("live_allocs", Json::Uint(a.peak.live_allocs * scale)),
+        (
+            "live_bytes",
+            Json::Uint(a.peak.live_bytes.saturating_mul(scale)),
+        ),
+        (
+            "live_allocs",
+            Json::Uint(a.peak.live_allocs.saturating_mul(scale)),
+        ),
     ]);
 
     let mut ids: Vec<NodeId> = (1..a.tree.len() as NodeId)
@@ -536,14 +551,32 @@ pub fn summary(a: &Analysis, leaks: &LeakReport) -> Json {
                 with(
                     site_fields(a, i),
                     vec![
-                        ("allocs", Json::Uint(st.allocs * scale)),
-                        ("alloc_bytes", Json::Uint(st.alloc_bytes * scale)),
-                        ("frees", Json::Uint(st.frees * scale)),
-                        ("freed_bytes", Json::Uint(st.freed_bytes * scale)),
-                        ("live_allocs", Json::Uint(st.live_allocs * scale)),
-                        ("live_bytes", Json::Uint(st.live_bytes * scale)),
-                        ("peak_live_bytes", Json::Uint(st.peak_live_bytes * scale)),
-                        ("short_lived_allocs", Json::Uint(st.short_allocs * scale)),
+                        ("allocs", Json::Uint(st.allocs.saturating_mul(scale))),
+                        (
+                            "alloc_bytes",
+                            Json::Uint(st.alloc_bytes.saturating_mul(scale)),
+                        ),
+                        ("frees", Json::Uint(st.frees.saturating_mul(scale))),
+                        (
+                            "freed_bytes",
+                            Json::Uint(st.freed_bytes.saturating_mul(scale)),
+                        ),
+                        (
+                            "live_allocs",
+                            Json::Uint(st.live_allocs.saturating_mul(scale)),
+                        ),
+                        (
+                            "live_bytes",
+                            Json::Uint(st.live_bytes.saturating_mul(scale)),
+                        ),
+                        (
+                            "peak_live_bytes",
+                            Json::Uint(st.peak_live_bytes.saturating_mul(scale)),
+                        ),
+                        (
+                            "short_lived_allocs",
+                            Json::Uint(st.short_allocs.saturating_mul(scale)),
+                        ),
                     ],
                 )
             })
@@ -601,8 +634,8 @@ pub fn summary(a: &Analysis, leaks: &LeakReport) -> Json {
                 with(
                     site_fields(a, e.node),
                     vec![
-                        ("allocs", Json::Uint(e.allocs * scale)),
-                        ("bytes", Json::Uint(e.bytes * scale)),
+                        ("allocs", Json::Uint(e.allocs.saturating_mul(scale))),
+                        ("bytes", Json::Uint(e.bytes.saturating_mul(scale))),
                         ("avg_lifetime_ns", Json::Uint(e.avg_lifetime_ns)),
                         ("max_concurrent", Json::Uint(e.max_concurrent)),
                         ("share", Json::Float(e.share)),
@@ -619,8 +652,11 @@ pub fn summary(a: &Analysis, leaks: &LeakReport) -> Json {
                 obj(vec![
                     ("label", s(m.label.clone())),
                     ("ts_ns", Json::Uint(m.ts_ns)),
-                    ("live_bytes", Json::Uint(m.live_bytes * scale)),
-                    ("live_allocs", Json::Uint(m.live_allocs * scale)),
+                    ("live_bytes", Json::Uint(m.live_bytes.saturating_mul(scale))),
+                    (
+                        "live_allocs",
+                        Json::Uint(m.live_allocs.saturating_mul(scale)),
+                    ),
                 ])
             })
             .collect(),

@@ -35,16 +35,30 @@ First beta, for the founding users.
   (slot 0 of a pool sits at its backing block's address): the block stays live until it is freed,
   and its pool objects are counted on top of it. The trace format is now 1.1 (a `PoolFree` event);
   1.0 traces still read as before.
+- If the `heapscope` that controls a capture ends in any way (killed, closed console, closed output pipe),
+  the capture DLL notices and finishes the trace on its own; `run` puts the target in a job object so
+  it ends with the CLI. `attach` no longer panics when its output is closed.
+- `run` resolves the program itself: a bare name is looked up on `PATH` only (not in the current
+  directory), and `.bat`/`.cmd` files are refused instead of being handed to `cmd.exe`.
+- Whether the DLL started is decided by the control block, not by the remote thread's exit code.
+- A second capture into a trace file that is already being written fails with a clear message.
+- `attach` says "exited" when the target ended, no longer reports unconfirmed markers as recorded,
+  and a disk-full write error is no longer described as a crash. The control block is now version 2.
 
 ### Analysis
 - `heapscope analyze`: totals, peak, top allocation sites with source lines, and leak candidates
   grouped by call path, with built-in and user suppressions.
 - `heapscope diff` compares two traces or two markers in one trace.
 - `analyze -o summary.json` writes a versioned JSON summary (schema v1, see `docs/json-schema.md`).
+- A trace is treated as untrusted input: module paths that are not plain local drive paths (network
+  shares, device names) are never opened for symbols, the reader caps stacks, frames, events and
+  decoded bytes over the whole file, and byte totals saturate with a warning instead of wrapping.
 
 ### Reports
 - `heapscope report` writes one offline HTML file: summary, call tree, flame graph, timeline with
   markers, and a diff view.
+  The page carries a content security policy that forbids all network access and any script but
+  its own.
 
 ### CI gate (paid tier)
 - `heapscope-ci` fails a build on a memory regression against a baseline in your repository,

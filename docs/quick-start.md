@@ -19,7 +19,8 @@ cmake -S samples -B build/samples
 cmake --build build/samples --config RelWithDebInfo
 ```
 
-The tool is then `target\release\heapscope.exe`. The examples below use the sample `leak.exe`.
+The tool is then `target\x86_64-pc-windows-msvc\release\heapscope.exe` (the build targets the 64-bit
+MSVC triple explicitly). The examples below use the sample `leak.exe`.
 
 ## 2. Record a run
 

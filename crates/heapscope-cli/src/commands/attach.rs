@@ -5,7 +5,7 @@
 //! target keeps running. Only allocations made after the attach are seen, so the result is net
 //! growth since attach, not exit-time leaks. Each line typed on stdin becomes a marker.
 
-use std::io::{BufRead, Write};
+use std::io::BufRead;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering::*};
@@ -25,7 +25,7 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
 };
 
-use super::absolute_output;
+use super::{absolute_output, OUTPUT_CLOSED};
 use crate::launch::{self, CaptureOptions, Control, DLL_NAME};
 
 pub struct AttachArgs {
@@ -138,23 +138,26 @@ pub fn attach(args: AttachArgs) -> Result<ExitCode, String> {
         stack_depth: args.stack_depth,
         attached: true,
     };
+    // Before anything is injected: from here on Ctrl-C asks for an orderly stop instead of killing
+    // this process. (If it dies anyway, the DLL notices and goes dormant by itself.)
+    // SAFETY: the handler only stores to an atomic.
+    unsafe { SetConsoleCtrlHandler(Some(on_ctrl_c), 1) };
     let ctl = Arc::new(Control::create(args.pid, &opts)?);
-    launch::inject(process.0, &dll).map_err(|e| ctl.explain(e))?;
-    launch::require_capturing(&ctl)?;
-    println!(
+    let injected = launch::inject(process.0, &dll).map_err(|e| ctl.explain(e))?;
+    launch::require_capturing(&ctl, injected)?;
+    say!(
         "attached to process {}: capturing to {}",
         args.pid,
         opts.output.display()
     );
-    println!("press Enter to add a marker; Ctrl-C to stop");
-    flush_stdout();
+    say!("press Enter to add a marker; Ctrl-C to stop");
 
-    // SAFETY: the handler only stores to an atomic.
-    unsafe { SetConsoleCtrlHandler(Some(on_ctrl_c), 1) };
     spawn_marker_reader(Arc::clone(&ctl), args.stop_on_eof);
 
     let deadline = args.duration.map(|d| Instant::now() + d);
+    // A closed stdout means the reader of this output is gone (a pipeline ended); stop as for Ctrl-C.
     while !INTERRUPTED.load(SeqCst)
+        && !OUTPUT_CLOSED.load(Relaxed)
         && !process.has_exited()
         && deadline.map_or(true, |d| Instant::now() < d)
     {
@@ -172,12 +175,14 @@ pub fn attach(args: AttachArgs) -> Result<ExitCode, String> {
         std::thread::sleep(Duration::from_millis(10));
     }
     match ctl.state.load(Acquire) {
-        state::DORMANT => println!(
+        // The exit handler in the DLL also reports dormant when the target ends, so ask the
+        // process, not the DLL, whether it is still there.
+        state::FAILED => return Err(ctl.failure_reason()),
+        _ if process.has_exited() => say!("process {} exited while capturing", args.pid),
+        state::DORMANT => say!(
             "detached from process {}; the program keeps running",
             args.pid
         ),
-        state::FAILED => return Err(ctl.failure_reason()),
-        _ if process.has_exited() => println!("process {} exited while capturing", args.pid),
         _ => {
             return Err(
                 "the capture DLL did not finish flushing in time; the trace may be incomplete"
@@ -185,13 +190,8 @@ pub fn attach(args: AttachArgs) -> Result<ExitCode, String> {
             )
         }
     }
-    println!("heapscope: {}", launch::summary(&ctl, &opts.output));
-    flush_stdout();
+    say!("heapscope: {}", launch::summary(&ctl, &opts.output));
     Ok(ExitCode::SUCCESS)
-}
-
-fn flush_stdout() {
-    let _ = std::io::stdout().flush();
 }
 
 /// Every line on stdin becomes a marker in the trace; the line is echoed once the DLL has it.
@@ -214,8 +214,11 @@ fn spawn_marker_reader(ctl: Arc<Control>, stop_on_eof: bool) {
                 while ctl.marker_ack.load(Acquire) != seq && Instant::now() < until {
                     std::thread::sleep(Duration::from_millis(2));
                 }
-                println!("marker recorded: {label}");
-                flush_stdout();
+                if ctl.marker_ack.load(Acquire) == seq {
+                    say!("marker recorded: {label}");
+                } else {
+                    say!("marker NOT confirmed by the capture within 2 seconds: {label}");
+                }
             }
             if stop_on_eof {
                 INTERRUPTED.store(true, SeqCst);

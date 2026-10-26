@@ -223,6 +223,28 @@ pub fn analyze(trace: &Trace, resolver: &mut dyn FrameResolver, opts: &Options) 
         ));
     }
 
+    // Sums saturate instead of wrapping. A sum cannot honestly reach u64::MAX, so a field at the
+    // ceiling means the trace named sizes that do not fit.
+    let t = &collector.totals;
+    let saturated = [
+        t.alloc_bytes,
+        t.freed_bytes,
+        t.live_bytes,
+        collector.peak.peak.live_bytes,
+    ]
+    .contains(&u64::MAX)
+        || collector
+            .stats
+            .iter()
+            .any(|s| [s.alloc_bytes, s.freed_bytes, s.live_bytes].contains(&u64::MAX));
+    if saturated {
+        warnings.push(
+            "byte totals exceed 2^64 and are capped at the maximum; the trace contains impossible \
+             allocation sizes (damaged or hand-made), so sizes and the peak are not reliable"
+                .into(),
+        );
+    }
+
     let churn = churn::detect(&collector.stats);
     let mut live_groups = end.live_groups();
     live_groups.extend(leaks::live_handles(

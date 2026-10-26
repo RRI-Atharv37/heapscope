@@ -139,8 +139,8 @@ pub fn detect(analysis: &Analysis, suppressions: &Suppressions) -> LeakReport {
     for e in &entries {
         match kinds.iter_mut().find(|k| k.kind == e.kind) {
             Some(k) => {
-                k.allocs += e.allocs;
-                k.bytes += e.bytes;
+                k.allocs = k.allocs.saturating_add(e.allocs);
+                k.bytes = k.bytes.saturating_add(e.bytes);
             }
             None => kinds.push(KindTotal {
                 kind: e.kind,
@@ -192,10 +192,14 @@ pub fn detect(analysis: &Analysis, suppressions: &Suppressions) -> LeakReport {
         estimated: cap.sampled,
         scale,
         complete: cap.complete,
-        total_allocs: entries.iter().map(|e| e.allocs).sum(),
-        total_bytes: entries.iter().map(|e| e.bytes).sum(),
-        suppressed_allocs: suppressed.iter().map(|e| e.allocs).sum(),
-        suppressed_bytes: suppressed.iter().map(|e| e.bytes).sum(),
+        total_allocs: entries.iter().fold(0u64, |a, e| a.saturating_add(e.allocs)),
+        total_bytes: entries.iter().fold(0u64, |a, e| a.saturating_add(e.bytes)),
+        suppressed_allocs: suppressed
+            .iter()
+            .fold(0u64, |a, e| a.saturating_add(e.allocs)),
+        suppressed_bytes: suppressed
+            .iter()
+            .fold(0u64, |a, e| a.saturating_add(e.bytes)),
         entries,
         suppressed,
         by_kind: kinds,

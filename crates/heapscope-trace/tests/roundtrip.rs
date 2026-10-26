@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use heapscope_trace::{
-    AllocKind, CaptureMode, ChurnSummary, Dropped, Error, Event, HandleKind, Header, StackId,
-    TraceReader, TraceWriter, FORMAT_MAJOR, NO_STACK,
+    AllocKind, CaptureMode, ChurnSummary, Dropped, Error, Event, HandleKind, Header, Limits,
+    StackId, TraceReader, TraceWriter, FORMAT_MAJOR, NO_STACK,
 };
 
 fn header() -> Header {
@@ -743,4 +743,43 @@ fn churn_summary_merge_adds_totals_and_keeps_peak() {
             max_concurrent: 3
         }
     );
+}
+
+fn small_trace() -> Vec<u8> {
+    let stacks = vec![vec![1, 2, 3], vec![4, 5], vec![6]];
+    let events: Vec<Event> = (0..4)
+        .map(|i| Event::Alloc {
+            ts_ns: i,
+            thread: 1,
+            kind: AllocKind::Heap,
+            addr: 0x1000 + i * 16,
+            size: 16,
+            requested: 16,
+            stack: 1,
+        })
+        .collect();
+    write_trace(&header(), &stacks, &events, Dropped::default()).bytes
+}
+
+fn read_with(bytes: &[u8], limits: Limits) -> Result<Vec<Event>, Error> {
+    TraceReader::with_limits(bytes, limits)?.collect()
+}
+
+#[test]
+fn cumulative_limits_reject_oversized_files_as_corrupt() {
+    let bytes = small_trace();
+    assert_eq!(read_with(&bytes, Limits::default()).unwrap().len(), 4);
+
+    let tight = |f: fn(&mut Limits)| {
+        let mut l = Limits::default();
+        f(&mut l);
+        read_with(&bytes, l)
+    };
+    assert!(matches!(tight(|l| l.stacks = 2), Err(Error::Corrupt(_))));
+    assert!(matches!(tight(|l| l.frames = 5), Err(Error::Corrupt(_))));
+    assert!(matches!(tight(|l| l.events = 3), Err(Error::Corrupt(_))));
+    assert!(matches!(
+        tight(|l| l.decoded_bytes = 10),
+        Err(Error::Corrupt(_))
+    ));
 }

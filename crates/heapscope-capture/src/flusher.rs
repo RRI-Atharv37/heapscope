@@ -6,9 +6,10 @@
 //! to the chunked writer.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::BufWriter;
 use std::os::windows::ffi::OsStringExt;
+use std::os::windows::fs::OpenOptionsExt;
 use std::sync::atomic::Ordering::*;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -17,16 +18,23 @@ use heapscope_control::{error, state, ControlBlock};
 use heapscope_trace::{
     AllocKind, CaptureMode, ChurnSummary, Dropped, Event, Header, StackId, TraceWriter, NO_STACK,
 };
+use windows_sys::Win32::Foundation::{GetLastError, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Environment::GetCommandLineW;
 use windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcessId, SetEvent, Sleep, WaitForSingleObject,
+    CreateEventW, GetCurrentProcessId, OpenProcess, SetEvent, Sleep, WaitForSingleObject,
 };
 
 use crate::buffer::{self, ThreadBuf, R_ALLOC, R_CHURN, R_FREE, R_MARKER, R_REALLOC, R_STACK};
 use crate::control::Config;
 use crate::{clock, control, modules, sampling, STATE, STATE_OFF, STATE_STOPPING};
 
+const FILE_SHARE_READ: u32 = 1;
+const ERROR_SHARING_VIOLATION: i32 = 32;
+const SYNCHRONIZE: u32 = 0x0010_0000;
+/// The controlling CLI's process handle, opened on first use (so its exit stays observable even if
+/// its pid is reused).
+static CONTROLLER: core::sync::atomic::AtomicIsize = core::sync::atomic::AtomicIsize::new(0);
 const BATCH_LIMIT: usize = 32 * 1024;
 const IDLE_SLEEP_MS: u32 = 5;
 /// Auto-reset event the flush thread waits on when idle; producers set it when a ring is full.
@@ -117,7 +125,18 @@ pub fn open(cfg: &Config) -> Result<(), u32> {
         WAKE.store(h as isize, Relaxed);
     }
     let path = std::ffi::OsString::from_wide(&cfg.out);
-    let file = File::create(&path).map_err(|_| error::OPEN_OUTPUT)?;
+    // Readers may open the file while it grows, but a second writer may not: two captures into one
+    // file would interleave their chunks.
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&path)
+        .map_err(|e| match e.raw_os_error() {
+            Some(ERROR_SHARING_VIOLATION) => error::OUTPUT_IN_USE,
+            _ => error::OPEN_OUTPUT,
+        })?;
     let writer = TraceWriter::new(BufWriter::with_capacity(1 << 20, file), &build_header(cfg))
         .map_err(|_| error::WRITE_HEADER)?;
     let mut sink = Sink {
@@ -378,7 +397,8 @@ pub fn run() {
             }
             (
                 seen,
-                control::get().is_some_and(|c| c.state.load(Acquire) == state::STOP_REQUESTED),
+                control::get().is_some_and(|c| c.state.load(Acquire) == state::STOP_REQUESTED)
+                    || controller_gone(),
             )
         };
         if stop {
@@ -397,6 +417,31 @@ pub fn run() {
                 }
             }
         }
+    }
+}
+
+/// Whether the CLI that started this capture has ended. Then nobody can stop or collect the capture,
+/// so the flush thread finishes it by itself.
+fn controller_gone() -> bool {
+    let Some(c) = control::get() else {
+        return false;
+    };
+    let pid = c.controller_pid.load(Relaxed);
+    if pid == 0 {
+        return false;
+    }
+    let mut h = CONTROLLER.load(Relaxed);
+    // SAFETY: plain Win32 calls on a handle this function opened and never closes.
+    unsafe {
+        if h == 0 {
+            h = OpenProcess(SYNCHRONIZE, 0, pid) as isize;
+            if h == 0 {
+                // No such process any more; any other failure says nothing about the CLI.
+                return GetLastError() == ERROR_INVALID_PARAMETER;
+            }
+            CONTROLLER.store(h, Relaxed);
+        }
+        WaitForSingleObject(h as *mut core::ffi::c_void, 0) == WAIT_OBJECT_0
     }
 }
 

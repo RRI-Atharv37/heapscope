@@ -13,6 +13,31 @@ use crate::{
 /// Longest call stack accepted from a file.
 const MAX_STACK_DEPTH: u64 = 1 << 16;
 
+/// Ceilings on what one file may make the reader hold or produce. A few kilobytes of LZ4 expand
+/// to megabytes, so the per-chunk limit alone does not bound a hostile file; these bound the
+/// whole file. Real captures stay far below the defaults.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    /// Distinct stacks.
+    pub stacks: u64,
+    /// Frames summed over all stacks (8 bytes each in memory).
+    pub frames: u64,
+    pub events: u64,
+    /// Decompressed bytes summed over all chunks.
+    pub decoded_bytes: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            stacks: 1 << 26,
+            frames: 1 << 27,
+            events: 1 << 31,
+            decoded_bytes: 1 << 40,
+        }
+    }
+}
+
 /// Reads events one at a time; only one chunk is held in memory.
 ///
 /// Stacks are filled in as the events that use them are reached, so `stacks()` is complete
@@ -27,11 +52,18 @@ pub struct TraceReader<R: Read> {
     pos: usize,
     decoder: EventDecoder,
     events_read: u64,
+    frames_read: u64,
+    decoded_bytes: u64,
+    limits: Limits,
     done: bool,
 }
 
 impl<R: Read> TraceReader<R> {
-    pub fn new(mut input: R) -> Result<Self> {
+    pub fn new(input: R) -> Result<Self> {
+        Self::with_limits(input, Limits::default())
+    }
+
+    pub fn with_limits(mut input: R, limits: Limits) -> Result<Self> {
         let mut magic = [0u8; 8];
         if read_fully(&mut input, &mut magic)? != magic.len() || magic != MAGIC {
             return Err(Error::BadMagic);
@@ -47,6 +79,7 @@ impl<R: Read> TraceReader<R> {
             });
         }
         let (tag, payload) = read_chunk(&mut input)?.ok_or(Error::Truncated)?;
+        let decoded_bytes = payload.len() as u64;
         if tag != CHUNK_HEADER {
             return Err(Error::Corrupt("first chunk is not the header"));
         }
@@ -61,6 +94,9 @@ impl<R: Read> TraceReader<R> {
             pos: 0,
             decoder: EventDecoder::default(),
             events_read: 0,
+            frames_read: 0,
+            decoded_bytes,
+            limits,
             done: false,
         })
     }
@@ -92,6 +128,9 @@ impl<R: Read> TraceReader<R> {
                 let event = self.decoder.decode(&mut d)?;
                 self.pos += d.position();
                 self.events_read += 1;
+                if self.events_read > self.limits.events {
+                    return Err(Error::Corrupt("more events than the reader accepts"));
+                }
                 return Ok(Some(event));
             }
             if self.done || !self.load_next_chunk()? {
@@ -107,6 +146,10 @@ impl<R: Read> TraceReader<R> {
                 self.done = true;
                 return Ok(false);
             };
+            self.decoded_bytes = self.decoded_bytes.saturating_add(payload.len() as u64);
+            if self.decoded_bytes > self.limits.decoded_bytes {
+                return Err(Error::Corrupt("more decoded data than the reader accepts"));
+            }
             match tag {
                 CHUNK_STACKS => self.load_stacks(&payload)?,
                 CHUNK_EVENTS => {
@@ -134,11 +177,18 @@ impl<R: Read> TraceReader<R> {
     fn load_stacks(&mut self, payload: &[u8]) -> Result<()> {
         let mut d = Decoder::new(payload);
         let count = d.u64()?;
+        if count > self.limits.stacks.saturating_sub(self.stacks.len() as u64) {
+            return Err(Error::Corrupt("more stacks than the reader accepts"));
+        }
         let mut frames = Vec::new();
         for _ in 0..count {
             let depth = d.u64()?;
             if depth > MAX_STACK_DEPTH || depth as usize > d.remaining() {
                 return Err(Error::Corrupt("implausible stack depth"));
+            }
+            self.frames_read = self.frames_read.saturating_add(depth);
+            if self.frames_read > self.limits.frames {
+                return Err(Error::Corrupt("more stack frames than the reader accepts"));
             }
             frames.clear();
             let mut prev = 0u64;

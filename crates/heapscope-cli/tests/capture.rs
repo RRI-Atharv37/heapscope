@@ -882,9 +882,219 @@ fn a_dll_of_another_control_version_says_so_instead_of_blaming_antivirus() {
     let text = stdout_text(&out);
     assert!(
         text.contains("different HeapScope build")
-            && text.contains("version 1")
+            && text.contains("version 2")
             && text.contains("version 77"),
         "{text}"
     );
     assert!(!text.contains("antivirus"), "{text}");
+}
+
+// ---- H5: launcher robustness ----
+
+fn start_growth() -> (Talker, u32) {
+    let dir = samples_dir().expect("samples");
+    let mut growth = Talker::spawn({
+        let mut c = std::process::Command::new(sample(&dir, "growth"));
+        c.arg("--wait-for-attach");
+        c
+    });
+    let pid = growth
+        .read_line()
+        .strip_prefix("PID ")
+        .expect("PID line")
+        .parse()
+        .unwrap();
+    (growth, pid)
+}
+
+fn wait_exit(child: &mut std::process::Child, secs: u64) -> std::process::ExitStatus {
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            return s;
+        }
+        assert!(
+            std::time::Instant::now() < end,
+            "process did not exit in {secs} s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Poll until the trace has a footer (the DLL closed it), and return its size then.
+fn wait_for_footer(trace: &std::path::Path, secs: u64) -> u64 {
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        let closed = std::panic::catch_unwind(|| replay(trace).footer.is_some()).unwrap_or(false);
+        if closed {
+            return std::fs::metadata(trace).unwrap().len();
+        }
+        assert!(
+            std::time::Instant::now() < end,
+            "the trace was never closed: the DLL is still capturing"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
+#[test]
+fn run_refuses_batch_files_and_does_not_search_the_current_directory() {
+    let work = scratch("launcher-resolve");
+    let bat = work.join("x.bat");
+    std::fs::write(&bat, "@echo hi\r\n").unwrap();
+    let out = heapscope().args(["run", "--"]).arg(&bat).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stdout_text(&out).contains("batch"), "{}", stdout_text(&out));
+
+    // A bare name that exists only in the current directory is not run.
+    std::fs::copy(env!("CARGO_BIN_EXE_heapscope"), work.join("only-here.exe")).unwrap();
+    let out = heapscope()
+        .current_dir(&work)
+        .args(["run", "--", "only-here"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stdout_text(&out).contains("not found on PATH"),
+        "{}",
+        stdout_text(&out)
+    );
+}
+
+#[test]
+fn two_runs_into_one_trace_file_fail_cleanly_and_the_first_is_unharmed() {
+    let Some(dir) = samples_dir() else { return };
+    let work = scratch("launcher-same-output");
+    let trace = work.join("same.hstrace");
+    let mut first = Talker::spawn({
+        let mut c = heapscope();
+        c.arg("run")
+            .arg("-o")
+            .arg(&trace)
+            .arg("--")
+            .arg(sample(&dir, "growth"))
+            .arg("--wait-for-attach");
+        c
+    });
+    first.read_line(); // PID: the first capture is up and holds the file
+    let second = heapscope()
+        .arg("run")
+        .arg("-o")
+        .arg(&trace)
+        .arg("--")
+        .arg(sample(&dir, "leak"))
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(1));
+    assert!(
+        stdout_text(&second).contains("another capture is writing"),
+        "{}",
+        stdout_text(&second)
+    );
+    first.send("grow 2");
+    assert_eq!(first.read_line(), "grown 2");
+    first.send("quit");
+    assert_eq!(first.child.wait().unwrap().code(), Some(0));
+    let r = replay(&trace);
+    assert!(r.footer.is_some());
+    assert_eq!(r.count_allocs_of_size(65_536), 2);
+}
+
+#[test]
+fn attach_says_exited_when_the_target_ends() {
+    let Some(_) = samples_dir() else { return };
+    let work = scratch("attach-exited");
+    let trace = work.join("exited.hstrace");
+    let (mut growth, pid) = start_growth();
+    let mut att = Talker::spawn({
+        let mut c = heapscope();
+        c.args(["attach", "--pid", &pid.to_string(), "-o"])
+            .arg(&trace);
+        c
+    });
+    att.read_until("attached to process");
+    growth.send("grow 2");
+    assert_eq!(growth.read_line(), "grown 2");
+    growth.send("quit");
+    assert_eq!(growth.child.wait().unwrap().code(), Some(0));
+    let line = att.read_until("while capturing");
+    assert!(line.contains("exited"), "{line}");
+    assert!(wait_exit(&mut att.child, 20).success());
+}
+
+#[test]
+fn attach_with_a_closed_stdout_ends_cleanly_and_leaves_the_target_dormant() {
+    let Some(_) = samples_dir() else { return };
+    let work = scratch("attach-closed-stdout");
+    let trace = work.join("closed.hstrace");
+    let (mut growth, pid) = start_growth();
+    let Talker {
+        mut child,
+        stdin,
+        mut stdout,
+    } = Talker::spawn({
+        let mut c = heapscope();
+        c.args([
+            "attach",
+            "--pid",
+            &pid.to_string(),
+            "--duration",
+            "3s",
+            "-o",
+        ])
+        .arg(&trace);
+        c
+    });
+    let mut first = String::new();
+    stdout.read_line(&mut first).unwrap();
+    assert!(first.contains("attached to process"), "{first}");
+    drop(stdout); // nobody reads the output any more
+    let status = wait_exit(&mut child, 20);
+    assert!(status.success(), "the CLI did not end cleanly: {status:?}");
+    drop(stdin);
+
+    let size = wait_for_footer(&trace, 10);
+    growth.send("grow 4");
+    assert_eq!(growth.read_line(), "grown 4");
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(
+        std::fs::metadata(&trace).unwrap().len(),
+        size,
+        "the trace kept growing"
+    );
+    growth.send("quit");
+    assert_eq!(growth.child.wait().unwrap().code(), Some(0));
+}
+
+#[test]
+fn a_killed_attach_cli_leaves_the_target_dormant_within_seconds() {
+    let Some(_) = samples_dir() else { return };
+    let work = scratch("attach-cli-killed");
+    let trace = work.join("killed-cli.hstrace");
+    let (mut growth, pid) = start_growth();
+    let mut att = Talker::spawn({
+        let mut c = heapscope();
+        c.args(["attach", "--pid", &pid.to_string(), "-o"])
+            .arg(&trace);
+        c
+    });
+    att.read_until("attached to process");
+    growth.send("grow 3");
+    assert_eq!(growth.read_line(), "grown 3");
+    att.child.kill().unwrap();
+    att.child.wait().unwrap();
+
+    // The DLL notices the controller is gone, finishes the trace and stops recording.
+    let size = wait_for_footer(&trace, 15);
+    growth.send("grow 4");
+    assert_eq!(growth.read_line(), "grown 4");
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(
+        std::fs::metadata(&trace).unwrap().len(),
+        size,
+        "the trace kept growing"
+    );
+    assert_eq!(replay(&trace).count_allocs_of_size(65_536), 3);
+    growth.send("quit");
+    assert_eq!(growth.child.wait().unwrap().code(), Some(0));
 }

@@ -95,11 +95,11 @@ impl Replayer {
     fn release(&mut self, addr: u64, kind: AllocKind, ts: u64, emit: &mut dyn FnMut(Effect)) {
         match self.live.remove(&key(addr, kind)) {
             Some(b) => {
-                self.bytes -= b.size;
-                self.allocs -= 1;
+                self.bytes = self.bytes.saturating_sub(b.size);
+                self.allocs = self.allocs.saturating_sub(1);
                 let n = &mut self.per_node[b.node as usize];
-                n.0 -= 1;
-                n.1 -= b.size;
+                n.0 = n.0.saturating_sub(1);
+                n.1 = n.1.saturating_sub(b.size);
                 emit(Effect::Free {
                     node: b.node,
                     size: b.size,
@@ -125,18 +125,18 @@ impl Replayer {
             kind,
         };
         if let Some(old) = self.live.insert(key(addr, kind), block) {
-            self.bytes -= old.size;
-            self.allocs -= 1;
+            self.bytes = self.bytes.saturating_sub(old.size);
+            self.allocs = self.allocs.saturating_sub(1);
             let n = &mut self.per_node[old.node as usize];
-            n.0 -= 1;
-            n.1 -= old.size;
+            n.0 = n.0.saturating_sub(1);
+            n.1 = n.1.saturating_sub(old.size);
             emit(Effect::Missed);
         }
-        self.bytes += op.size;
+        self.bytes = self.bytes.saturating_add(op.size);
         self.allocs += 1;
         let n = &mut self.per_node[node as usize];
         n.0 += 1;
-        n.1 += op.size;
+        n.1 = n.1.saturating_add(op.size);
         emit(Effect::Alloc {
             node,
             size: op.size,
@@ -157,7 +157,7 @@ impl Replayer {
                 newest_ts_ns: b.ts,
             });
             g.allocs += 1;
-            g.bytes += b.size;
+            g.bytes = g.bytes.saturating_add(b.size);
             g.oldest_ts_ns = g.oldest_ts_ns.min(b.ts);
             g.newest_ts_ns = g.newest_ts_ns.max(b.ts);
         }
@@ -290,7 +290,7 @@ impl Collector {
             peak: PeakTracker::default(),
             timeline: vec![None; timeline_points.max(1)],
             t0,
-            span: t1 - t0,
+            span: t1.saturating_sub(t0),
             short_ns,
             filtering,
         }
@@ -308,9 +308,9 @@ impl Observer for Collector {
             Effect::Alloc { node, size } => {
                 let s = &mut self.stats[node as usize];
                 s.allocs += 1;
-                s.alloc_bytes += size;
+                s.alloc_bytes = s.alloc_bytes.saturating_add(size);
                 self.totals.allocs += 1;
-                self.totals.alloc_bytes += size;
+                self.totals.alloc_bytes = self.totals.alloc_bytes.saturating_add(size);
             }
             Effect::Free {
                 node,
@@ -319,15 +319,15 @@ impl Observer for Collector {
             } => {
                 let s = &mut self.stats[node as usize];
                 s.frees += 1;
-                s.freed_bytes += size;
-                s.lifetime_ns += lifetime_ns;
+                s.freed_bytes = s.freed_bytes.saturating_add(size);
+                s.lifetime_ns = s.lifetime_ns.saturating_add(lifetime_ns);
                 if lifetime_ns < self.short_ns {
                     s.short_allocs += 1;
-                    s.short_bytes += size;
-                    s.short_lifetime_ns += lifetime_ns;
+                    s.short_bytes = s.short_bytes.saturating_add(size);
+                    s.short_lifetime_ns = s.short_lifetime_ns.saturating_add(lifetime_ns);
                 }
                 self.totals.frees += 1;
-                self.totals.freed_bytes += size;
+                self.totals.freed_bytes = self.totals.freed_bytes.saturating_add(size);
             }
             // With a filter active most frees belong to allocations that were filtered out.
             Effect::Unmatched => {
@@ -342,7 +342,8 @@ impl Observer for Collector {
     fn after_op(&mut self, index: usize, op: &Op, state: &Replayer) {
         self.peak.observe(index, op.ts, state.bytes, state.allocs);
         let n = self.timeline.len() as u128;
-        let b = ((u128::from(op.ts - self.t0) * n) / (u128::from(self.span) + 1)) as usize;
+        let b = ((u128::from(op.ts.saturating_sub(self.t0)) * n) / (u128::from(self.span) + 1))
+            as usize;
         let last = self.timeline.len() - 1;
         let slot = &mut self.timeline[b.min(last)];
         if slot.is_none_or_smaller(state.bytes) {

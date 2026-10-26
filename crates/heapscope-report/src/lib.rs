@@ -117,7 +117,7 @@ fn tree(a: &Analysis) -> Json {
         .map(|id| table.index(&a.tree.node(id as u32).frame))
         .collect();
     let stat = |pick: fn(&heapscope_analysis::PathStats) -> u64| {
-        column(a.stats.iter().map(move |s| pick(s) * scale))
+        column(a.stats.iter().map(move |s| pick(s).saturating_mul(scale)))
     };
     obj(vec![
         // [function, module, file, line]
@@ -146,8 +146,14 @@ fn snapshots(a: &Analysis) -> Json {
             .map(|s| {
                 obj(vec![
                     ("nodes", column(s.live.iter().map(|l| u64::from(l.0)))),
-                    ("allocs", column(s.live.iter().map(|l| l.1 * scale))),
-                    ("bytes", column(s.live.iter().map(|l| l.2 * scale))),
+                    (
+                        "allocs",
+                        column(s.live.iter().map(|l| l.1.saturating_mul(scale))),
+                    ),
+                    (
+                        "bytes",
+                        column(s.live.iter().map(|l| l.2.saturating_mul(scale))),
+                    ),
                 ])
             })
             .collect(),
@@ -176,7 +182,9 @@ pub fn diff_data<'a>(before: &Side<'a>, after: &Side<'a>, diff: &Diff) -> Result
         let scale = side.analysis.scale();
         Ok(diffing::live_at(side.analysis, side.point)?
             .into_iter()
-            .map(|(n, allocs, bytes)| (n, allocs * scale, bytes * scale))
+            .map(|(n, allocs, bytes)| {
+                (n, allocs.saturating_mul(scale), bytes.saturating_mul(scale))
+            })
             .collect())
     };
     let (live_before, live_after) = (live(before)?, live(after)?);
@@ -312,8 +320,8 @@ fn timeline(a: &Analysis) -> Json {
             .map(|p| {
                 Json::Array(vec![
                     uint(p.ts_ns),
-                    uint(p.live_bytes * scale),
-                    uint(p.live_allocs * scale),
+                    uint(p.live_bytes.saturating_mul(scale)),
+                    uint(p.live_allocs.saturating_mul(scale)),
                 ])
             })
             .collect(),
@@ -329,6 +337,20 @@ mod tests {
         assert_eq!(TEMPLATE.matches(TOKEN).count(), 1);
         assert!(TEMPLATE
             .contains(r#"<script id="hs-data" type="application/json">{{HS_DATA}}</script>"#));
+    }
+
+    #[test]
+    fn the_template_forbids_network_access_by_policy() {
+        let meta = TEMPLATE
+            .split("<meta http-equiv=\"Content-Security-Policy\" content=\"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .expect("CSP meta tag");
+        assert!(meta.contains("default-src 'none'"));
+        assert!(meta.contains("connect-src 'none'"));
+        assert!(!meta.contains("http"));
+        assert!(!meta.contains("/*HS_"), "unfilled build placeholder");
+        assert!(meta.contains("script-src 'sha256-"));
     }
 
     #[test]

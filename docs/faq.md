@@ -13,6 +13,11 @@ HeapScope itself.
 No. Capture, analysis and reports all run on your machine, and the HTML report is one offline file.
 The CI gate checks its licence locally.
 
+Resolving symbols reads the program images named in the trace from your local disk (the same paths the
+capture recorded). Paths that are not plain local drive paths, such as network shares or device names, are
+never opened, so a trace from someone else cannot make `analyze` contact another machine. The report
+carries a content security policy that forbids all network access.
+
 ## Which programs does it work on?
 
 64-bit Windows programs that use the Windows heap, which includes `malloc`, `new` and `HeapAlloc`

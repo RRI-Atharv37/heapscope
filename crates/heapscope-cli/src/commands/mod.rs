@@ -1,10 +1,37 @@
+/// Write a line to stdout, tolerating a closed pipe: `println!` panics (and the release build aborts)
+/// when the reader went away, which would leave a capture running with no controller.
+macro_rules! say {
+    ($($t:tt)*) => { $crate::commands::emit(false, format_args!($($t)*)) };
+}
+
+/// Like [`say!`] for stderr.
+macro_rules! say_err {
+    ($($t:tt)*) => { $crate::commands::emit(true, format_args!($($t)*)) };
+}
+
 pub mod analyze;
 pub mod attach;
 pub mod diff;
 pub mod report;
 pub mod run;
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set when a write to stdout or stderr failed: nobody is reading the output any more.
+pub static OUTPUT_CLOSED: AtomicBool = AtomicBool::new(false);
+
+pub fn emit(to_stderr: bool, line: std::fmt::Arguments<'_>) {
+    let result = if to_stderr {
+        writeln!(std::io::stderr(), "{line}")
+    } else {
+        writeln!(std::io::stdout(), "{line}")
+    };
+    if result.is_err() {
+        OUTPUT_CLOSED.store(true, Ordering::Relaxed);
+    }
+}
 
 /// Parse `500ms`, `5s`, `2m`, `1h`. A bare number uses `default_unit_ms` (1 = ms, 1000 = s).
 pub fn parse_duration_ms(text: &str, default_unit_ms: u64) -> Result<u64, String> {

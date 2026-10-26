@@ -17,7 +17,7 @@ use std::io;
 
 pub use event::{AllocKind, ChurnSummary, Event, HandleKind, StackId, NO_STACK};
 pub use header::{CaptureMode, Dropped, Footer, Header};
-pub use reader::TraceReader;
+pub use reader::{Limits, TraceReader};
 pub use stack_table::StackTable;
 pub use writer::TraceWriter;
 

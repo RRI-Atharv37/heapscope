@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64};
 
 pub const MAGIC: u32 = 0x4248_5348; // "HSHB" little endian; just needs to be recognisable
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 /// UTF-16 code units available for the output path, including the terminating NUL.
 pub const PATH_UNITS: usize = 520;
 /// Bytes available for a marker label, including the terminating NUL.
@@ -43,6 +43,8 @@ pub mod error {
     /// different builds. The code carries the DLL's own control version above bit 8 (see
     /// [`version_mismatch`]), so the CLI can name both.
     pub const VERSION_MISMATCH: u32 = 8;
+    /// Another capture already has the output file open for writing.
+    pub const OUTPUT_IN_USE: u32 = 9;
 }
 
 /// The `error_code` a DLL of control version `dll_version` reports for a block of another version.
@@ -94,6 +96,10 @@ pub struct ControlBlock {
     pub attached: AtomicU32,
     /// Maximum frames per call stack (0 = default).
     pub stack_depth: AtomicU32,
+    /// Process id of the CLI that created the block. The DLL watches that process and stops
+    /// recording (goes dormant, writes the footer) when it ends, so a CLI that dies mid-capture
+    /// cannot leave the target recording for nobody. 0 = no controller (manual injection).
+    pub controller_pid: AtomicU32,
     /// Incremented by the CLI after it wrote `marker_label`; the DLL records a marker per change.
     pub marker_seq: AtomicU32,
     /// The DLL copies `marker_seq` here once the marker is in the trace, so the CLI can wait for it.

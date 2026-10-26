@@ -546,3 +546,30 @@ fn a_trace_cut_off_mid_chunk_still_yields_the_events_before_it() {
     assert!(a.totals.allocs >= 1);
     assert!(!a.warnings.is_empty());
 }
+
+#[test]
+fn sizes_that_sum_past_u64_max_saturate_and_are_flagged() {
+    let t = build(
+        &header(),
+        &[
+            alloc(100, 1, 0x1000, u64::MAX - 5, 1),
+            alloc(200, 1, 0x2000, u64::MAX - 5, 1),
+            alloc(300, 1, 0x3000, 64, 2),
+            free(400, 0x1000),
+            free(500, 0x2000),
+        ],
+    );
+    let a = run(&t, &Options::default());
+    assert_eq!(a.totals.alloc_bytes, u64::MAX);
+    assert_eq!(a.peak.live_bytes, u64::MAX);
+    assert!(
+        a.warnings.iter().any(|w| w.contains("exceed 2^64")),
+        "{:?}",
+        a.warnings
+    );
+    let plain = run(
+        &build(&header(), &[alloc(1, 1, 0x1000, 64, 1)]),
+        &Options::default(),
+    );
+    assert!(!plain.warnings.iter().any(|w| w.contains("exceed 2^64")));
+}
