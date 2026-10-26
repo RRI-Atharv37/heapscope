@@ -30,8 +30,11 @@ and when the oldest and newest of them were made.
   so what is live is **net growth since attach**, not leaks. The report is titled accordingly.
   Frees of memory allocated before the attach are expected and are not errors.
 - **Sampled capture (`--sample N`)**: counts and sizes are multiplied by N and labelled
-  **estimated**. A small leak can be missed entirely, so a sampled trace cannot show that a
-  program is leak free. Handle counts are never sampled and are not scaled.
+  **estimated**. Each allocation is kept with probability 1/N, so a site with many allocations is
+  accurate to about `1 / sqrt(allocations kept)` (a few percent for tens of thousands of
+  allocations), while a small site or a small leak is noisy or missed entirely: a sampled trace
+  cannot show that a program is leak free. Live bytes and the peak are estimates too. Handle
+  counts are never sampled and are not scaled.
 
 Lost events skew the picture too: a lost free looks like a leak, a lost allocation hides one. The
 report warns when the capture buffers overflowed.

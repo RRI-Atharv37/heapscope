@@ -3,9 +3,12 @@
  *   4 threads x 100 blocks of 32 B   (first macro use races on every thread; never freed)
  *   10 blocks of 48 B, the first 4 freed, the 5th resized to 96 B
  *   markers "c-start" and "c-end"
- * Live at exit: 400 x 32 B + 5 x 48 B + 1 x 96 B. */
+ * Live at exit: 400 x 32 B + 5 x 48 B + 1 x 96 B.
+ * Built twice: as C11 (header-c) and as C89/C90 (header-c89). */
 #include "../../include/heapscope/heapscope.h"
 
+/* After heapscope.h on purpose: the header must not need, or clash with, <windows.h>. */
+#include <windows.h>
 #include <stdio.h>
 
 #define THREADS 4

@@ -101,9 +101,12 @@ These are conventions of the capture DLL (S1.4), not requirements of the format:
   includes the CRT's own 52-byte header and guards.
 - **Frees carry no stack** (`stack = 0`): capturing a stack on every free would cost more than the
   information is worth. Analysis attributes a free to the stack of the allocation it matches.
-- **Reallocs** are one Realloc event stamped *before* the real call, so no allocation another
-  thread makes at the old address can sort ahead of it. A sampled capture turns a realloc whose old
-  or new address was not sampled into a plain Free or Alloc.
+- **Reallocs** are written as two events, a Free of the old address stamped *before* the real call
+  and an Alloc of the new address stamped *after* it. The old block is released inside the call, so
+  no allocation another thread makes at that address can sort ahead of the Free; the new block does
+  not exist before the call returns, so no free another thread made of that address can sort behind
+  the Alloc. (One Realloc event with one timestamp cannot be right for both: the capture used to
+  write that, and readers still accept it.) A sampled capture decides each half on its own.
 - **Ordering.** Each thread writes into its own buffer, so events from different threads are only
   roughly in time order. Sort by `ts` (stable) before replaying; an event and its matching free can
   share a timestamp only if the clock did not advance between them (the clock ticks every 100 ns).
@@ -113,9 +116,9 @@ These are conventions of the capture DLL (S1.4), not requirements of the format:
   times per stack (sum them). `max_concurrent` counts allocations of the stack that were *held for
   the lifetime test* at the same time, so it can slightly exceed the true number: some of the held
   allocations are later written out normally.
-- **Sampling** keeps an allocation when a hash of its address falls in 1/N, applied to the Free as
-  well, so a kept allocation always has its free. Multiply counts and bytes of a sampled trace by
-  N for an estimate.
+- **Sampling** keeps each allocation with probability 1/N, drawn independently per allocation, and
+  keeps the free of every kept allocation (matched through a table of kept addresses, whichever
+  thread frees it). Multiply counts and bytes of a sampled trace by N for an estimate.
 - **Attached captures** (`attached = true` in the header) miss every allocation made before the
   attach, so a Free whose address was never allocated in the trace is normal there; count and ignore it.
 

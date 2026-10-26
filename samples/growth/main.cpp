@@ -5,7 +5,9 @@
 //            grow N    allocate N more 64 KiB blocks, keep them, reply "grown N"
 //            shrink N  free N of the blocks allocated by `grow`, reply "shrunk N"
 //            mem       reply "private <bytes>": the process's private (committed) memory
+//            mark TEXT reply "marked": HEAPSCOPE_MARK("TEXT") from the program itself (heapscope.h)
 //            quit      exit with code 0
+#include "../../include/heapscope/heapscope.h"
 #include "../common/expected.hpp"
 
 #include <chrono>
@@ -56,6 +58,12 @@ static int wait_for_attach() {
             PROCESS_MEMORY_COUNTERS_EX pmc = {};
             GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof pmc);
             std::printf("private %llu\n", (unsigned long long)pmc.PrivateUsage);
+        }
+        else if (std::strncmp(line, "mark ", 5) == 0) {
+            std::string label(line + 5);
+            while (!label.empty() && (label.back() == '\n' || label.back() == '\r')) label.pop_back();
+            HEAPSCOPE_MARK(label.c_str());
+            std::printf("marked\n");
         }
         else if (std::strncmp(line, "quit", 4) == 0) break;
         std::fflush(stdout);

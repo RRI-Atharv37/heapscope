@@ -17,7 +17,8 @@ code base; the rest of HeapScope is GPL-3.0-only.
 4. If the pool can resize a block, call `HEAPSCOPE_REALLOC(old_ptr, new_ptr, new_size, pool)` after it.
 5. Optionally call `HEAPSCOPE_MARK("label")` at points you want to compare (end of level load, after a
    request). Markers show up in the trace as labelled points in time.
-6. Run the program under `heapscope run` or `heapscope attach` as usual.
+6. Run the program under `heapscope run` or `heapscope attach` as usual. Under `attach`, see
+   "Behaviour to know" below: only what happens after the attach is seen.
 
 ## Before and after
 
@@ -58,8 +59,13 @@ objects `pool_leak_site` never releases are listed as live at exit.
 
 ## Behaviour to know
 
-- Outside HeapScope the macros do nothing but a cached lookup of the DLL (done once per translation
-  unit, safe from any thread). They can stay in release builds.
+- Outside HeapScope the macros do nothing but read the tick count: while the capture DLL is not
+  loaded, each translation unit looks for it again about four times a second, so a later
+  `heapscope attach` is picked up within a quarter of a second (the lookup is safe from any thread).
+  They can stay in release builds. Once the DLL has been found it is remembered for good.
+- With `heapscope attach`, only pool objects allocated **after** the attach are visible, and so are
+  their frees. An object handed out before the attach and released after it is a free without an
+  allocation, which the analysis counts and ignores. Markers work as soon as the header has found the DLL.
 - The macros obey the same rules as the heap hooks: `--sample` and `--min-lifetime` apply, and a call
   made from inside a hook is ignored.
 - Pointers must be unique among live pool objects. Report the pointer the caller receives, not an
@@ -72,4 +78,8 @@ objects `pool_leak_site` never releases are listed as live at exit.
 - `HEAPSCOPE_REALLOC` is recorded as a free of the old pointer followed by an allocation of the new
   one, so an object that is resized in place shows up as a new allocation at the resize site.
 - A label passed to `HEAPSCOPE_MARK` is cut off after 200 bytes.
-- Plain C works: `samples/header-c` compiles the header as C and is part of the tests.
+- The header needs nothing but the compiler's own headers: it does not include `<windows.h>`,
+  define `WIN32_LEAN_AND_MEAN` or bring `min`/`max` macros into your code, and it can be included
+  before or after `<windows.h>`. Every macro argument is evaluated at most once.
+- Plain C works, from C89/C90 on: `samples/header-c` is built as C11 and as C89, `samples/header-cxx`
+  checks the C++ side in two translation units and both include orders, all as part of the tests.

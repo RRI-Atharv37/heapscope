@@ -11,6 +11,19 @@ First beta, for the founding users.
   kernel handles are not recorded yet. Custom allocators can report through the optional
   MIT-licensed header in `include/`.
 - `--sample N` and `--min-lifetime` lower the overhead; the report says when numbers are estimates.
+- `--sample N` now decides per allocation instead of per address, so the estimate for a site that
+  reuses a few addresses (a hot `new`/`delete` pair) is no longer off by a factor of two or more.
+  The error is about `1 / sqrt(allocations kept)`; see `docs/capture-options.md`.
+- `--min-lifetime` no longer folds a free into a stale hold when blocks change hands between
+  threads: a free from any thread cancels the hold on that address, so such programs no longer show
+  false leaks.
+- A `realloc` is written as a Free of the old address and an Alloc of the new one, each stamped on
+  the right side of the call, so it can no longer sort behind or ahead of another thread's free.
+- The optional header `heapscope.h` works after `heapscope attach` (it looks for the DLL again
+  until it finds it), no longer includes `<windows.h>` or defines `WIN32_LEAN_AND_MEAN`, evaluates
+  every argument at most once, and is tested as C89, C11 and C++.
+- `HEAPSCOPE_DLL` must be a full path to an existing file. A DLL from another HeapScope build is
+  reported as such instead of being blamed on antivirus.
 - Frees made while a thread or the process shuts down are now recorded, so per-thread loader
   blocks and memory a DLL frees in its static destructors no longer show up as live or as missed frees.
 - An exception raised out of a heap call (`HEAP_GENERATE_EXCEPTIONS`) no longer stops recording on that thread.

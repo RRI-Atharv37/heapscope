@@ -12,7 +12,7 @@ use std::ptr::{null, null_mut};
 use std::sync::atomic::Ordering::*;
 use std::time::Duration;
 
-use heapscope_control::{error, state, ControlBlock, MAGIC, VERSION};
+use heapscope_control::{error, split_error, state, ControlBlock, MAGIC, VERSION};
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
 };
@@ -121,7 +121,13 @@ impl Control {
         ctl.min_lifetime_ms.store(opts.min_lifetime_ms, Relaxed);
         ctl.stack_depth.store(opts.stack_depth, Relaxed);
         ctl.attached.store(u32::from(opts.attached), Relaxed);
-        ctl.version.store(VERSION, Relaxed);
+        // `HEAPSCOPE_TEST_CONTROL_VERSION` exists for the tests: it plays a CLI of another build,
+        // to check what the user is told when the DLL does not match.
+        let version = std::env::var("HEAPSCOPE_TEST_CONTROL_VERSION")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(VERSION);
+        ctl.version.store(version, Relaxed);
         ctl.magic.store(MAGIC, Release); // last: the DLL ignores a block without the magic
         Ok(ctl)
     }
@@ -137,14 +143,23 @@ impl Control {
 
     /// Why the DLL could not start, in words.
     pub fn failure_reason(&self) -> String {
-        let what = match self.error_code.load(Relaxed) {
+        let (kind, dll_version) = split_error(self.error_code.load(Relaxed));
+        if kind == error::VERSION_MISMATCH {
+            return format!(
+                "the capture DLL belongs to a different HeapScope build: it uses control block \
+                 version {dll_version}, this heapscope.exe uses version {}. Use the \
+                 heapscope_capture.dll that came with this heapscope.exe (check HEAPSCOPE_DLL)",
+                self.version.load(Relaxed)
+            );
+        }
+        let what = match kind {
             error::BAD_CONTROL_BLOCK => "the control block was unreadable",
             error::OPEN_OUTPUT => {
                 "the trace file could not be created (check the path and permissions)"
             }
             error::WRITE_HEADER => "the trace header could not be written",
             error::HOOK_INSTALL => "the heap hooks could not be installed",
-            error::OUT_OF_MEMORY => "no thread-local storage slots were free",
+            error::OUT_OF_MEMORY => "no thread-local storage slots or memory were available",
             error::START_THREAD => "the flush thread could not be started",
             error::WRITE_FAILED => "writing the trace failed (disk full?)",
             _ => {
@@ -155,10 +170,27 @@ impl Control {
     }
 }
 
-/// `heapscope_capture.dll` next to this executable, or the path in `HEAPSCOPE_DLL`.
+/// `heapscope_capture.dll` next to this executable, or the full path in `HEAPSCOPE_DLL`.
+///
+/// The path is handed to `LoadLibraryW` *inside the target*, which searches a relative name in its
+/// own directories first, so only a full path to an existing file is accepted.
 pub fn dll_path() -> Result<PathBuf, String> {
-    if let Some(p) = std::env::var_os("HEAPSCOPE_DLL") {
-        return Ok(PathBuf::from(p));
+    if let Some(p) = std::env::var_os("HEAPSCOPE_DLL").filter(|p| !p.is_empty()) {
+        let path = PathBuf::from(p);
+        if !path.is_absolute() {
+            return Err(format!(
+                "HEAPSCOPE_DLL must be a full path (like C:\\tools\\heapscope_capture.dll), not `{}`: \
+                 the program being profiled would look for a relative name in its own folders",
+                path.display()
+            ));
+        }
+        if !path.is_file() {
+            return Err(format!(
+                "HEAPSCOPE_DLL names a file that does not exist: {}",
+                path.display()
+            ));
+        }
+        return Ok(path);
     }
     let exe = std::env::current_exe().map_err(|e| format!("cannot locate heapscope.exe: {e}"))?;
     let dll = exe.with_file_name(DLL_NAME);

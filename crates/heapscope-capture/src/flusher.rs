@@ -455,6 +455,7 @@ pub unsafe fn finish_capture(exiting: bool) {
     STATE.store(STATE_OFF, SeqCst);
     if !exiting {
         buffer::decommit_all();
+        sampling::release_tables();
         // SAFETY: no callback can run once this returns, and the flush thread is the caller.
         modules::remove();
     }

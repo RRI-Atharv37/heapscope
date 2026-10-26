@@ -9,7 +9,7 @@
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, Ordering::*};
 
-use heapscope_control::{ControlBlock, MAGIC, VERSION};
+use heapscope_control::{ControlBlock, ControlHeader, HEADER_BYTES, MAGIC, VERSION};
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::System::Environment::GetEnvironmentVariableW;
 use windows_sys::Win32::System::Memory::{MapViewOfFile, OpenFileMappingW, FILE_MAP_ALL_ACCESS};
@@ -65,6 +65,16 @@ fn env_u32(name: &str) -> u32 {
         .unwrap_or(0)
 }
 
+/// If `header` is a HeapScope control block of another version, tell the CLI so: it would
+/// otherwise wait for a DLL that never answers and blame antivirus.
+unsafe fn tell_version_mismatch(header: *const ControlHeader) {
+    if let Some(h) = header.as_ref() {
+        if h.magic.load(Acquire) == MAGIC && h.version.load(Relaxed) != VERSION {
+            h.report_version_mismatch(VERSION);
+        }
+    }
+}
+
 /// Map the control block of this process, if the CLI made one.
 fn open_mapping() -> Option<&'static ControlBlock> {
     // SAFETY: plain Win32 calls; the view is never unmapped.
@@ -75,13 +85,22 @@ fn open_mapping() -> Option<&'static ControlBlock> {
             return None;
         }
         let view = MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, ControlBlock::SIZE);
-        CloseHandle(h); // the view keeps the mapping alive
         let p = view.Value as *mut ControlBlock;
         if p.is_null() {
+            // The block is smaller than this build's: another version, or something that is not
+            // ours. Its first fields are the same in every version, so look at just those.
+            let head = MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, HEADER_BYTES);
+            CloseHandle(h);
+            tell_version_mismatch(head.Value as *const ControlHeader);
             return None;
         }
+        CloseHandle(h); // the view keeps the mapping alive
         let c = &*p;
-        if c.magic.load(Acquire) != MAGIC || c.version.load(Relaxed) != VERSION {
+        if c.magic.load(Acquire) != MAGIC {
+            return None;
+        }
+        if c.version.load(Relaxed) != VERSION {
+            tell_version_mismatch(p as *const ControlHeader);
             return None;
         }
         CTL.store(p, Release);

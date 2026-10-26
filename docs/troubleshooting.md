@@ -19,8 +19,12 @@ functions, which is also what malware does. If a scanner quarantines `heapscope.
 `heapscope_capture.dll`, or `run` fails with `LoadLibrary failed in the target`, add an exclusion for
 the folder that holds them.
 
-**`heapscope_capture.dll` not found.** It must sit next to `heapscope.exe`, or be named in the
-`HEAPSCOPE_DLL` environment variable.
+**`heapscope_capture.dll` not found.** It must sit next to `heapscope.exe`, or be named by its full
+path in the `HEAPSCOPE_DLL` environment variable (a relative path is refused).
+
+**"the capture DLL belongs to a different HeapScope build".** `heapscope.exe` and
+`heapscope_capture.dll` come from different versions and cannot talk to each other. Use the pair
+from one download, and check that `HEAPSCOPE_DLL` is not pointing at an old copy.
 
 ## Function names are missing
 

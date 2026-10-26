@@ -3,9 +3,13 @@
 //! functions, whatever CRT the program was built with. `RtlDestroyHeap` is hooked as well: it
 //! releases every block of a private heap without a call to `RtlFreeHeap`.
 //!
-//! Ordering rules (pitfalls 1 and 2): the guard is held across the original call, a free is
+//! Ordering rules (pitfalls 1 and 2): the guard is held across the original call, and a free is
 //! logged *before* the real free (the address may be reused by another thread the moment the real
-//! free returns), and a realloc is stamped *before* the call for the same reason.
+//! free returns). A realloc is written as two events, because the old block is released inside the
+//! call and the new one exists only after it: a Free of the old address stamped before the call, an
+//! Alloc of the new address stamped after it, like any other allocation. One event with one
+//! timestamp could not be ordered right against other threads' frees and allocations of either
+//! address.
 
 use core::ffi::c_void;
 use core::ptr::null_mut;
@@ -13,13 +17,12 @@ use core::sync::atomic::{AtomicPtr, Ordering::*};
 
 use minhook::MinHook;
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
-use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Memory::{
     GetProcessHeap, HeapLock, HeapUnlock, HeapWalk, PROCESS_HEAP_ENTRY,
 };
 
 use super::{enter, leave};
-use crate::buffer::{header, ThreadBuf, R_ALLOC, R_FREE, R_REALLOC};
+use crate::buffer::{header, ThreadBuf, R_ALLOC, R_FREE};
 use crate::{clock, sampling, stack};
 
 // `PROCESS_HEAP_ENTRY.wFlags` bits (winnt.h).
@@ -34,13 +37,11 @@ static ORIG_ALLOC: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static ORIG_REALLOC: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static ORIG_FREE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static ORIG_DESTROY: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
-static RTL_SIZE_HEAP: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
 type AllocFn = unsafe extern "system" fn(*mut c_void, u32, usize) -> *mut c_void;
 type ReallocFn = unsafe extern "system" fn(*mut c_void, u32, *mut c_void, usize) -> *mut c_void;
 type FreeFn = unsafe extern "system" fn(*mut c_void, u32, *mut c_void) -> u8;
 type DestroyFn = unsafe extern "system" fn(*mut c_void) -> *mut c_void;
-type SizeFn = unsafe extern "system" fn(*mut c_void, u32, *const c_void) -> usize;
 
 extern "C" {
     fn hs_call_alloc(f: AllocFn, heap: *mut c_void, flags: u32, size: usize) -> *mut c_void;
@@ -77,15 +78,6 @@ pub unsafe fn create() -> bool {
             Err(_) => false,
         }
     }
-    let ntdll: Vec<u16> = "ntdll.dll\0".encode_utf16().collect();
-    let size_fn = GetProcAddress(
-        GetModuleHandleW(ntdll.as_ptr()),
-        c"RtlSizeHeap".as_ptr().cast(),
-    );
-    match size_fn {
-        Some(f) => RTL_SIZE_HEAP.store(f as *mut c_void, SeqCst),
-        None => return false,
-    }
     hook(
         "RtlAllocateHeap",
         hk_alloc as AllocFn as *mut c_void,
@@ -104,10 +96,18 @@ pub unsafe fn create() -> bool {
 
 #[inline(never)]
 pub(crate) unsafe fn record_alloc(tb: &ThreadBuf, addr: u64, size: u64, kind: u8, ts: u64) {
-    if !sampling::keep(addr, sampling::one_in()) {
-        tb.dropped_sampling
-            .store(tb.dropped_sampling.load(Relaxed) + 1, Relaxed);
-        return;
+    let one_in = sampling::one_in();
+    if one_in > 1 {
+        if !sampling::draw(tb, one_in) {
+            tb.dropped_sampling
+                .store(tb.dropped_sampling.load(Relaxed) + 1, Relaxed);
+            return;
+        }
+        // Remember it so its free, from any thread, is kept too. No room: leave it out entirely
+        // (the loss is counted in the footer) rather than write an allocation that never ends.
+        if !sampling::mark_kept(addr, kind) {
+            return;
+        }
     }
     let mut frames = [0u64; stack::MAX_DEPTH];
     let n = stack::capture(&mut frames);
@@ -123,59 +123,21 @@ pub(crate) unsafe fn record_alloc(tb: &ThreadBuf, addr: u64, size: u64, kind: u8
 
 #[inline(never)]
 pub(crate) unsafe fn record_free(tb: &ThreadBuf, addr: u64, kind: u8, ts: u64) {
-    if !sampling::keep(addr, sampling::one_in()) {
+    if !sampling::take_kept(addr, kind) {
         return;
     }
+    push_free(tb, addr, kind, ts);
+}
+
+/// Write the free of an allocation that was recorded (or held back for the lifetime test).
+#[inline(never)]
+unsafe fn push_free(tb: &ThreadBuf, addr: u64, kind: u8, ts: u64) {
     // Only heap allocations are ever held, and a pool object may share its chunk's address:
     // a pool free must never fold the chunk away.
     if kind == KIND_HEAP && sampling::min_lifetime_ns() != 0 && sampling::fold_free(tb, ts, addr) {
         return;
     }
     tb.push(&[header(R_FREE, 3, kind, tb.tid), ts, addr]);
-}
-
-/// `old == 0` is a plain allocation. `ts` was taken before the real call.
-#[inline(never)]
-unsafe fn record_realloc(
-    tb: &ThreadBuf,
-    ts: u64,
-    old: u64,
-    new: u64,
-    old_size: u64,
-    new_size: u64,
-) {
-    if old == 0 {
-        record_alloc(tb, new, new_size, KIND_HEAP, ts);
-        return;
-    }
-    let one_in = sampling::one_in();
-    match (sampling::keep(old, one_in), sampling::keep(new, one_in)) {
-        (true, true) => {
-            sampling::release(tb, old);
-            let mut frames = [0u64; stack::MAX_DEPTH];
-            let n = stack::capture(&mut frames);
-            let hash = stack::define(tb, &frames[..n]);
-            tb.push(&[
-                header(R_REALLOC, 8, 0, tb.tid),
-                ts,
-                old,
-                new,
-                old_size,
-                new_size,
-                new_size,
-                hash,
-            ]);
-        }
-        (true, false) => {
-            sampling::release(tb, old);
-            tb.push(&[header(R_FREE, 3, 0, tb.tid), ts, old]);
-        }
-        (false, true) => record_alloc(tb, new, new_size, KIND_HEAP, ts),
-        (false, false) => {
-            tb.dropped_sampling
-                .store(tb.dropped_sampling.load(Relaxed) + 1, Relaxed);
-        }
-    }
 }
 
 unsafe extern "system" fn hk_alloc(heap: *mut c_void, flags: u32, size: usize) -> *mut c_void {
@@ -204,34 +166,36 @@ unsafe extern "system" fn hk_realloc(
 ) -> *mut c_void {
     let orig: ReallocFn = core::mem::transmute(ORIG_REALLOC.load(Relaxed));
     let tracked = enter();
-    let (ts, old_size) = match tracked {
+    // The call releases the old block, so the Free of it is stamped now, and a sampled capture
+    // forgets the old address now (another thread can take it the moment the call has freed it).
+    let (ts, old_kept) = match tracked {
         Some(_) => {
             let err = GetLastError();
-            let size_of_old = if old.is_null() {
-                0
-            } else {
-                let f: SizeFn = core::mem::transmute(RTL_SIZE_HEAP.load(Relaxed));
-                match f(heap, 0, old) {
-                    usize::MAX => 0,
-                    s => s as u64,
-                }
-            };
+            let kept = !old.is_null() && sampling::take_kept(old as u64, KIND_HEAP);
             let ts = clock::now_ns();
             SetLastError(err);
-            (ts, size_of_old)
+            (ts, kept)
         }
-        None => (0, 0),
+        None => (0, false),
     };
     let p = match tracked {
         Some(_) => hs_call_realloc(orig, heap, flags, old, size),
         None => orig(heap, flags, old, size),
     };
     if let Some(tb) = tracked {
-        if !p.is_null() {
-            let err = GetLastError();
-            record_realloc(tb, ts, old as u64, p as u64, old_size, size as u64);
-            SetLastError(err);
+        let err = GetLastError();
+        if p.is_null() {
+            // Failed: the old block is still there and still sampled.
+            if old_kept {
+                sampling::mark_kept(old as u64, KIND_HEAP);
+            }
+        } else {
+            if old_kept {
+                push_free(tb, old as u64, KIND_HEAP, ts);
+            }
+            record_alloc(tb, p as u64, size as u64, KIND_HEAP, clock::now_ns());
         }
+        SetLastError(err);
         leave(tb);
     }
     p

@@ -1,21 +1,46 @@
 //! `--sample N` and `--min-lifetime`: the two ways to keep traces small.
 //!
-//! * Sampling keeps an allocation when a hash of its *address* falls in 1/N, so its free (same
-//!   address) is kept too with no state. The header stores N so analysis can scale.
+//! * Sampling decides **per allocation**: each one is kept with probability 1/N by a pseudo-random
+//!   draw, and a kept address goes into a shared set so the free (from any thread) is kept too. The
+//!   header stores N so analysis can scale. (A decision by address alone would keep or drop every
+//!   reuse of the same address together, which skews sites that reuse a few addresses.)
 //! * Minimum lifetime holds each allocation in a small per-thread FIFO. If the same thread frees it
 //!   before the threshold, neither event is written and the stack's `ChurnSummary` grows instead;
-//!   otherwise the allocation is written later with its original timestamp.
+//!   otherwise the allocation is written later with its original timestamp. Held allocations are
+//!   also registered in a shared set, so a free from another thread cancels the hold: a stale hold
+//!   must never swallow the free of a later allocation at the same address.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
 
+use crate::addrmap::{AddrMap, Found};
 use crate::buffer::{header, ThreadBuf, CHURN_SLOTS, PEND_CAP, PEND_INDEX, R_ALLOC, R_CHURN};
 
 static ONE_IN: AtomicU32 = AtomicU32::new(1);
 static MIN_LIFETIME_NS: AtomicU64 = AtomicU64::new(0);
+/// Addresses (and kinds) of the live allocations sampling kept: 2^18 entries.
+static KEPT: AddrMap = AddrMap::new();
+/// Addresses of the allocations currently held for the lifetime test, with the ticket of the hold:
+/// 2^17 entries.
+static HELD: AddrMap = AddrMap::new();
+static TICKET: AtomicU64 = AtomicU64::new(1);
 
-pub fn configure(one_in: u32, min_lifetime_ms: u32) {
+/// Apply the options. False when the shared tables could not be allocated.
+pub fn configure(one_in: u32, min_lifetime_ms: u32) -> bool {
     ONE_IN.store(one_in.max(1), Relaxed);
     MIN_LIFETIME_NS.store(u64::from(min_lifetime_ms) * 1_000_000, Relaxed);
+    (one_in <= 1 || KEPT.create(18)) && (min_lifetime_ms == 0 || HELD.create(17))
+}
+
+/// Give the shared tables back after the final stop (no hook is running any more).
+pub fn release_tables() {
+    KEPT.destroy();
+    HELD.destroy();
+}
+
+/// Operations on the kept-address set that failed (table full or lock timeout): each is a sampled
+/// allocation or free that could not be tracked, so the capture is not exact.
+pub fn lost() -> u64 {
+    KEPT.lost()
 }
 
 #[inline(always)]
@@ -36,10 +61,47 @@ fn mix(addr: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// Whether sampling keeps this address (always true when sampling is off).
+/// Pseudo-random 64-bit value for a counter (splitmix64 finaliser).
 #[inline(always)]
-pub fn keep(addr: u64, one_in: u32) -> bool {
-    one_in <= 1 || ((mix(addr) >> 32) * u64::from(one_in)) >> 32 == 0
+fn scramble(x: u64) -> u64 {
+    let mut x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
+/// Whether draw number `n` of thread `tid` is one of the 1-in-`one_in` that are kept.
+#[inline(always)]
+fn drawn(tid: u32, n: u64, one_in: u32) -> bool {
+    ((scramble((u64::from(tid) << 40) ^ n) >> 32) * u64::from(one_in)) >> 32 == 0
+}
+
+/// Draw for one new allocation: true keeps it. Always true when sampling is off.
+#[inline(always)]
+pub fn draw(tb: &ThreadBuf, one_in: u32) -> bool {
+    if one_in <= 1 {
+        return true;
+    }
+    let n = tb.draws.load(Relaxed);
+    tb.draws.store(n + 1, Relaxed);
+    drawn(tb.tid, n, one_in)
+}
+
+/// Key of an address in the kept set: pool objects live in their own address space.
+#[inline(always)]
+fn kept_key(addr: u64, kind: u8) -> u64 {
+    (addr << 1) | u64::from(kind & 1)
+}
+
+/// Remember that a sampled allocation was kept, so its free is. False: no room, drop it instead.
+pub fn mark_kept(addr: u64, kind: u8) -> bool {
+    KEPT.insert(kept_key(addr, kind), 0)
+}
+
+/// Whether the free of `addr` belongs to a kept allocation (forgetting it). Always true when
+/// sampling is off.
+pub fn take_kept(addr: u64, kind: u8) -> bool {
+    one_in() <= 1 || matches!(KEPT.remove(kept_key(addr, kind), None), Found::Yes(_))
 }
 
 /// An allocation waiting to see whether it is freed quickly.
@@ -51,6 +113,8 @@ pub struct Pend {
     pub size: u64,
     pub hash: u64,
     pub valid: u64,
+    /// Identifies this hold in the shared set; another thread's free of the address removes it.
+    pub ticket: u64,
 }
 
 #[repr(C)]
@@ -101,6 +165,8 @@ unsafe fn churn_slot(tb: &ThreadBuf, hash: u64, create: bool) -> *mut ChurnSlot 
 
 /// Write a held entry as a normal allocation and forget it. The caller clears `valid`.
 unsafe fn write_held(tb: &ThreadBuf, e: &Pend) {
+    // Written normally: nobody may fold a later free into this hold any more.
+    HELD.remove(e.addr, Some(e.ticket));
     tb.push(&[
         header(R_ALLOC, 6, 0, tb.tid),
         e.ts,
@@ -172,6 +238,12 @@ pub unsafe fn hold(tb: &ThreadBuf, now: u64, addr: u64, size: u64, hash: u64) ->
     if cs.is_null() {
         return false;
     }
+    // Registered before the allocation is handed to the program, so no free can miss it. A full
+    // table only means this one is written normally.
+    let ticket = TICKET.fetch_add(1, Relaxed);
+    if !HELD.insert(addr, ticket) {
+        return false;
+    }
     if l.pend_head - l.pend_tail >= PEND_CAP as u64 {
         pop_front(tb);
     }
@@ -182,6 +254,7 @@ pub unsafe fn hold(tb: &ThreadBuf, now: u64, addr: u64, size: u64, hash: u64) ->
         size,
         hash,
         valid: 1,
+        ticket,
     };
     l.pend_head += 1;
     *l.pend_index.add(ix) = pos as u32 + 1;
@@ -193,6 +266,13 @@ pub unsafe fn hold(tb: &ThreadBuf, now: u64, addr: u64, size: u64, hash: u64) ->
 /// A free arrived. True means the allocation was still held and young: both events vanish into
 /// the stack's churn totals.
 pub unsafe fn fold_free(tb: &ThreadBuf, now: u64, addr: u64) -> bool {
+    // Whoever holds an allocation at this address, this free ends it: take the registration away
+    // first, so an entry of another thread (or an older one of this thread) can never fold a free
+    // that belongs to a later allocation at the same address.
+    let held = match HELD.remove(addr, None) {
+        Found::Yes(ticket) => ticket,
+        _ => return false,
+    };
     let l = tb.local();
     if l.pend.is_null() {
         return false;
@@ -204,7 +284,7 @@ pub unsafe fn fold_free(tb: &ThreadBuf, now: u64, addr: u64) -> bool {
         return false;
     }
     let e = &mut *l.pend.add((cur - 1) as usize);
-    if e.addr != addr {
+    if e.addr != addr || e.valid == 0 || e.ticket != held {
         return false;
     }
     e.valid = 0;
@@ -219,25 +299,6 @@ pub unsafe fn fold_free(tb: &ThreadBuf, now: u64, addr: u64) -> bool {
     tb.dropped_min_lifetime
         .store(tb.dropped_min_lifetime.load(Relaxed) + 1, Relaxed);
     true
-}
-
-/// Make sure a held allocation at `addr` is written before something else (a realloc) changes it.
-pub unsafe fn release(tb: &ThreadBuf, addr: u64) {
-    let l = tb.local();
-    if l.pend.is_null() {
-        return;
-    }
-    let ix = index_of(addr);
-    let cur = *l.pend_index.add(ix);
-    if cur == 0 {
-        return;
-    }
-    let e = &mut *l.pend.add((cur - 1) as usize);
-    if e.addr == addr {
-        write_held(tb, e);
-        e.valid = 0;
-        *l.pend_index.add(ix) = 0;
-    }
 }
 
 /// Write every held allocation (they are live as far as this thread knows).
@@ -286,18 +347,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keep_is_all_or_one_in_n_and_stable() {
-        assert!(keep(0x1000, 0) && keep(0x1000, 1));
-        let n = 20u32;
-        let total = 200_000u64;
-        let kept = (0..total)
-            .filter(|i| keep(0x1_0000_0000 + i * 16, n))
-            .count() as f64;
-        let expected = total as f64 / f64::from(n);
-        assert!(
-            (kept - expected).abs() / expected < 0.05,
-            "kept {kept}, expected ~{expected}"
-        );
-        assert_eq!(keep(0xdead_beef0, n), keep(0xdead_beef0, n));
+    fn draws_keep_one_in_n_whatever_the_thread() {
+        for tid in [1u32, 4242, 0xFFFF_0001] {
+            for n in [2u32, 10, 16, 1000] {
+                let total = 400_000u64;
+                let kept = (0..total).filter(|&i| drawn(tid, i, n)).count() as f64;
+                let expected = total as f64 / f64::from(n);
+                let sigma = (expected * (1.0 - 1.0 / f64::from(n))).sqrt();
+                assert!(
+                    (kept - expected).abs() < 5.0 * sigma,
+                    "tid {tid} one in {n}: kept {kept}, expected ~{expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_reused_address_is_decided_afresh_every_time() {
+        // The old address hash kept or dropped every reuse of an address together.
+        let kept = (0..10_000u64).filter(|&i| drawn(7, i, 16)).count();
+        assert!(kept > 400 && kept < 900, "{kept}");
     }
 }

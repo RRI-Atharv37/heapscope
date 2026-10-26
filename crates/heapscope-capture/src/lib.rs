@@ -10,6 +10,7 @@
 #![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
 #![cfg(windows)]
 
+mod addrmap;
 mod buffer;
 mod clock;
 mod control;
@@ -101,7 +102,10 @@ unsafe fn start() -> bool {
     let Some(cfg) = control::load() else {
         return fail(error::BAD_CONTROL_BLOCK);
     };
-    sampling::configure(cfg.sample_one_in, cfg.min_lifetime_ms);
+    if !sampling::configure(cfg.sample_one_in, cfg.min_lifetime_ms) {
+        sampling::release_tables();
+        return fail(error::OUT_OF_MEMORY);
+    }
     stack::set_depth(cfg.stack_depth);
     if let Err(code) = flusher::open(&cfg) {
         return fail(code);

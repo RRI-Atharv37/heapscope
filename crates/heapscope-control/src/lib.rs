@@ -39,6 +39,45 @@ pub mod error {
     pub const START_THREAD: u32 = 6;
     /// Writing the trace failed after start (disk full, file closed); the trace is truncated.
     pub const WRITE_FAILED: u32 = 7;
+    /// The control block's magic matched but its version did not: the DLL and the CLI are from
+    /// different builds. The code carries the DLL's own control version above bit 8 (see
+    /// [`version_mismatch`]), so the CLI can name both.
+    pub const VERSION_MISMATCH: u32 = 8;
+}
+
+/// The `error_code` a DLL of control version `dll_version` reports for a block of another version.
+pub const fn version_mismatch(dll_version: u32) -> u32 {
+    error::VERSION_MISMATCH | (dll_version << 8)
+}
+
+/// Split an `error_code` into its kind (one of [`error`]) and the DLL version it carries (only
+/// meaningful for [`error::VERSION_MISMATCH`]).
+pub const fn split_error(code: u32) -> (u32, u32) {
+    (code & 0xff, code >> 8)
+}
+
+/// Bytes at the start of every version of the control block that never move: [`ControlHeader`].
+pub const HEADER_BYTES: usize = std::mem::size_of::<ControlHeader>();
+
+/// The first four fields of [`ControlBlock`], in every version of it. A DLL that finds a block it
+/// cannot use (another version, possibly of another size) can still read the magic and version and
+/// report the mismatch through `state` and `error_code`.
+#[repr(C)]
+pub struct ControlHeader {
+    pub magic: AtomicU32,
+    pub version: AtomicU32,
+    pub state: AtomicU32,
+    pub error_code: AtomicU32,
+}
+
+impl ControlHeader {
+    /// Say that the DLL (control version `dll_version`) cannot work with this block.
+    pub fn report_version_mismatch(&self, dll_version: u32) {
+        use std::sync::atomic::Ordering::{Relaxed, Release};
+        self.error_code
+            .store(version_mismatch(dll_version), Relaxed);
+        self.state.store(state::FAILED, Release);
+    }
 }
 
 #[repr(C)]
@@ -159,6 +198,23 @@ mod tests {
         assert_eq!(
             String::from_utf16(&b.out_path_units()).unwrap(),
             "C:\tmp\tracé.hstrace"
+        );
+    }
+
+    #[test]
+    fn the_header_is_the_start_of_the_block_and_the_mismatch_code_carries_the_dll_version() {
+        assert_eq!(HEADER_BYTES, 16);
+        let b = block();
+        // SAFETY: `ControlHeader` repeats the first four fields of `ControlBlock`, same layout.
+        let h = unsafe { &*(&*b as *const ControlBlock as *const ControlHeader) };
+        b.magic.store(MAGIC, Relaxed);
+        b.version.store(9, Relaxed);
+        assert_eq!(h.version.load(Relaxed), 9);
+        h.report_version_mismatch(VERSION);
+        assert_eq!(b.state.load(Relaxed), state::FAILED);
+        assert_eq!(
+            split_error(b.error_code.load(Relaxed)),
+            (error::VERSION_MISMATCH, VERSION)
         );
     }
 

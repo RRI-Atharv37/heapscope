@@ -75,6 +75,8 @@ pub struct ThreadBuf {
     pub dropped_overflow: AtomicU64,
     pub dropped_sampling: AtomicU64,
     pub dropped_min_lifetime: AtomicU64,
+    /// Sampling draws made by the owning thread so far (only that thread touches it).
+    pub draws: AtomicU64,
     ring: *mut u64,
     local: UnsafeCell<Local>,
 }
@@ -240,6 +242,7 @@ pub unsafe fn create_for_current_thread() -> *mut ThreadBuf {
             dropped_overflow: AtomicU64::new(0),
             dropped_sampling: AtomicU64::new(0),
             dropped_min_lifetime: AtomicU64::new(0),
+            draws: AtomicU64::new(0),
             ring: region.add(off_ring) as *mut u64,
             local: UnsafeCell::new(Local {
                 stacks: region.add(off_stacks) as *mut u64,
@@ -326,7 +329,8 @@ pub fn dropped_totals() -> heapscope_trace::Dropped {
         d.min_lifetime += tb.dropped_min_lifetime.load(Relaxed);
         d.sampling += tb.dropped_sampling.load(Relaxed);
     });
-    d.overflow += THREADS_WITHOUT_BUFFER.load(Relaxed) + crate::modules::dropped();
+    d.overflow +=
+        THREADS_WITHOUT_BUFFER.load(Relaxed) + crate::modules::dropped() + sampling::lost();
     d
 }
 

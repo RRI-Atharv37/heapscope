@@ -135,6 +135,8 @@ pub struct Replay {
     pub markers: Vec<(u64, String)>,
     pub modules: Vec<(u64, u64, String)>,
     pub frees_without_alloc: u64,
+    /// Allocations recorded at an address the trace still holds as live (a free went missing).
+    pub allocs_over_live: u64,
 }
 
 fn ts_of(e: &Event) -> u64 {
@@ -175,6 +177,7 @@ pub fn replay(path: &Path) -> Replay {
         markers: Vec::new(),
         modules: Vec::new(),
         frees_without_alloc: 0,
+        allocs_over_live: 0,
     };
     for e in &events {
         match e {
@@ -192,13 +195,14 @@ pub fn replay(path: &Path) -> Replay {
                 } else {
                     &mut r.live
                 };
-                live.insert(
+                let replaced = live.insert(
                     *addr,
                     Block {
                         size: *size,
                         stack: *stack,
                     },
                 );
+                r.allocs_over_live += u64::from(replaced.is_some());
                 let t = r.allocated.entry(*stack).or_default();
                 t.allocs += 1;
                 t.bytes += size;
