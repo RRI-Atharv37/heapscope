@@ -159,7 +159,7 @@ pub fn attach(args: AttachArgs) -> Result<ExitCode, String> {
     while !INTERRUPTED.load(SeqCst)
         && !OUTPUT_CLOSED.load(Relaxed)
         && !process.has_exited()
-        && deadline.map_or(true, |d| Instant::now() < d)
+        && deadline.is_none_or(|d| Instant::now() < d)
     {
         std::thread::sleep(Duration::from_millis(20));
     }

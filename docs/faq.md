@@ -37,7 +37,7 @@ you may get banned. Profile offline builds, or your own tools and servers.
 | Lots of short-lived allocations (`new`/`delete` churn) | `--min-lifetime 5ms` | Totals stay exact; short-lived blocks are counted per call stack instead of traced |
 | Allocation rate so high that the program is too slow or the trace too big | `--sample N` | Counts become estimates (multiply by N); rare sites can be missed |
 | Looking for a leak | neither if you can afford it | Full capture is the most trustworthy |
-| Gating CI | `--min-lifetime` only | The gate rejects sampled traces |
+| Gating CI | neither | The gate rejects sampled, attached and `--min-lifetime` captures: it needs an exact peak |
 
 Both are recorded in the trace and shown in the report banner.
 

@@ -45,7 +45,7 @@ What an attached trace means:
 - Only allocations made **after** the attach are seen. A free of an allocation made earlier is
   recorded but has no matching allocation. The numbers are *net growth since attach* and
   *differences between markers*, not "what leaked at exit".
-- The header says `attached`, and `Header::is_partial()` is true, so the CI gate (S2) rejects it.
+- The header says `attached`, so the CI gate rejects it.
 - Threads that already existed work like any other; the first allocation on each creates its buffer.
 
 Limits:
@@ -69,7 +69,8 @@ CI gate rejects: use them for exploration, not for gating.
 An allocation freed on the same thread within this time is not written at all. Instead, the stack's
 **ChurnSummary** counts it: how many, how many bytes, total lifetime, and the most held at once. Nothing
 is lost from the totals: add the summaries to the allocations still in the trace and you get exactly
-what the program did. Allocations that live longer than the threshold are written with their original
+what the program did, except that the peak can be understated: memory held by a folded allocation
+at the busiest moment is not replayed. Allocations that live longer than the threshold are written with their original
 timestamp, a little later. An allocation freed by a *different* thread is written normally: its free
 is in the other thread's part of the trace, and the allocation is written when its hold ends. A
 free from any thread cancels the hold on that address, so a stale hold can never absorb the free of

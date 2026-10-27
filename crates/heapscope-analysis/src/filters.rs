@@ -32,8 +32,8 @@ impl Filter {
 
     pub(crate) fn allows_op(&self, thread: u32, size: u64) -> bool {
         (self.threads.is_empty() || self.threads.contains(&thread))
-            && self.min_size.map_or(true, |m| size >= m)
-            && self.max_size.map_or(true, |m| size <= m)
+            && self.min_size.is_none_or(|m| size >= m)
+            && self.max_size.is_none_or(|m| size <= m)
     }
 
     /// Does the (untrimmed) stack pass the module and text filters?

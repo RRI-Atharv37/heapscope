@@ -381,6 +381,6 @@ trait SlotExt {
 
 impl SlotExt for Option<TimelinePoint> {
     fn is_none_or_smaller(&self, bytes: u64) -> bool {
-        self.as_ref().map_or(true, |p| bytes >= p.live_bytes)
+        self.as_ref().is_none_or(|p| bytes >= p.live_bytes)
     }
 }

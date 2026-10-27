@@ -1,8 +1,8 @@
 #include <winres.h>
 
 1 VERSIONINFO
-FILEVERSION 0,1,0,0
-PRODUCTVERSION 0,1,0,0
+FILEVERSION @NUMERIC_VERSION@
+PRODUCTVERSION @NUMERIC_VERSION@
 FILEOS VOS_NT_WINDOWS32
 FILETYPE VFT_DLL
 BEGIN
@@ -12,11 +12,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "HeapScope"
       VALUE "FileDescription", "HeapScope in-process heap capture"
-      VALUE "FileVersion", "0.1.0"
+      VALUE "FileVersion", "@VERSION@"
       VALUE "InternalName", "heapscope_capture"
       VALUE "OriginalFilename", "heapscope_capture.dll"
       VALUE "ProductName", "HeapScope"
-      VALUE "ProductVersion", "0.1.0"
+      VALUE "ProductVersion", "@VERSION@"
     END
   END
   BLOCK "VarFileInfo"

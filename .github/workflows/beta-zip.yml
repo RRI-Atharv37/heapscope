@@ -1,11 +1,15 @@
 name: beta-zip
 
 # Builds heapscope-<version>.zip on a GitHub runner (no Smart App Control there). Run it by hand
-# from the Actions tab, or push a tag like v0.1.0-beta to also attach the zip to a pre-release.
+# from the Actions tab. Releases (tags, GitHub Releases) belong to release.yml.
 # The SHA-256 is printed in the job summary: it goes into the CI templates (HEAPSCOPE_SHA256).
 # No cache on purpose: this builds what gets shipped.
 on:
-  workflow_dispatch:   # tags are handled by release.yml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version in the zip name
+        default: 0.1.0-beta
 
 permissions:
   contents: read
@@ -14,8 +18,10 @@ jobs:
   package:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -23,24 +29,18 @@ jobs:
       - name: Report template is up to date
         working-directory: report
         run: |
-          npm ci
+          npm ci --ignore-scripts
           npm run build
           git diff --exit-code -- ../crates/heapscope-report/assets/report-template.html
       - name: Package
         shell: pwsh
         run: |
-          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.1.0-beta' }
+          $version = "${{ inputs.version }}"
           ./scripts/package-beta.ps1 -Version $version
           $zip = Get-ChildItem build/dist -Filter *.zip | Select-Object -First 1
           "ZIP=$($zip.FullName)" >> $env:GITHUB_ENV
           "### $($zip.Name)`nSHA-256: ``$((Get-FileHash $zip.FullName -Algorithm SHA256).Hash)``" >> $env:GITHUB_STEP_SUMMARY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: heapscope-zip
           path: ${{ env.ZIP }}
-      - name: Attach to a pre-release
-        if: github.ref_type == 'tag'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME $env:ZIP --prerelease --title $env:GITHUB_REF_NAME --notes-file CHANGELOG.md

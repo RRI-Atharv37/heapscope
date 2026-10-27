@@ -5,7 +5,7 @@ contribution.
 
 ## Build and test
 
-Windows x64 only. You need Rust (MSVC toolchain, pinned by `rust-toolchain.toml`), the Visual
+Windows x64 only. You need Rust (MSVC toolchain, pinned to an exact version by `rust-toolchain.toml`), the Visual
 Studio Build Tools with the Windows SDK, CMake, and Node 22 if you touch `report/`.
 
 ```

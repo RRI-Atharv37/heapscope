@@ -19,12 +19,14 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       # Caching is for CI only. The signed release build (release.yml, S4.4) must not cache.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       # The report page is built from report/ and committed, so Rust builds need no Node. This
       # fails when the two disagree.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -32,7 +34,7 @@ jobs:
       - name: Report template is up to date
         working-directory: report
         run: |
-          npm ci
+          npm ci --ignore-scripts
           npm run build
           git diff --exit-code -- ../crates/heapscope-report/assets/report-template.html
       - run: cargo fmt --all --check
@@ -50,7 +52,7 @@ jobs:
         env:
           HEAPSCOPE_REQUIRE_SAMPLES: "1"
         run: cargo test --workspace --locked
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
         with:
-          tool: cargo-deny
+          tool: cargo-deny@0.20.2
       - run: cargo deny check

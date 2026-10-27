@@ -5,9 +5,10 @@ baseline stored in your repository, and fails the build when memory got worse. I
 no HeapScope server is involved, and the licence is checked locally.
 
 Two ready-made pipelines are in [`ci-templates/`](../ci-templates): GitHub Actions and Azure
-Pipelines. The GitHub Actions one has been run end to end (a clean build passes, a seeded regression
-fails). **The Azure Pipelines one is written to the same design but has not been run on Azure yet**;
-expect to adjust it, and tell us what you had to change. [`examples/ci-demo`](../examples/ci-demo) is a small project with a clean and a
+Pipelines. The GitHub Actions pipeline ran on the demo project as a manually started workflow (a
+clean build passes, a seeded regression fails); **its pull-request trigger, comment step and fork
+behaviour, and the whole Azure Pipelines template, have not run on a real pipeline yet**. Expect to
+adjust them, and tell us what you had to change. [`examples/ci-demo`](../examples/ci-demo) is a small project with a clean and a
 regressed build to try them on.
 
 ## What you need
@@ -52,7 +53,7 @@ metric, which smooths out run-to-run noise. If you already have a summary
 
 ### Rules
 
-`--fail-on METRIC:RULE`, repeatable. A scenario with no `--fail-on` only prints the comparison.
+`--fail-on METRIC:RULE`, repeatable. A `gate` with no `--fail-on` prints the comparison and exits 0.
 
 | Metric | Meaning |
 |---|---|
@@ -74,17 +75,20 @@ do not fail a 5% rule on a small program.
 **Leaks are rarely zero.** The Windows loader and the C runtime keep a few allocations alive until
 exit, so a program with no leaks of its own still reports some (the demo has 25, about 21 KB).
 Gate the *growth* of `leaks` and `leak_bytes` against the baseline; `leaks:>0` would fail every
-build. Use `>0` only when your baseline was made with a suppressions file that removes them.
+build. Use `>0` only when the baseline and every gate run use the same suppressions file that
+removes them: pass it with `--suppressions FILE` (and `--no-builtin-suppressions` if the baseline
+was made without the built-in rules) when you use `--run`, or to `heapscope analyze` when you make
+the summary yourself.
 
 ### Exit codes
 
 | Code | Meaning |
 |---|---|
-| 0 | pass |
+| 0 | pass (also: no `--fail-on` rule, comparison printed only) |
 | 1 | regression: a rule failed |
 | 2 | usage or configuration: bad option, no baseline for the scenario, `heapscope` not found |
 | 3 | licence: key missing, malformed, wrongly signed or expired |
-| 4 | input not accepted: sampled or attached capture, unknown summary version, lost events, the scenario itself failed |
+| 4 | input not accepted: sampled, attached or `--min-lifetime` capture, unknown summary version, lost events, the scenario itself failed |
 
 ### Where the verdict goes
 
@@ -92,13 +96,14 @@ The Markdown table is printed to the log. It is also appended to the job summary
 (`$GITHUB_STEP_SUMMARY`), attached to the run on Azure Pipelines, and written to `--markdown FILE`
 for a pull-request comment. For a failing metric it names the call path that contributed most.
 
-## Why sampled and attached captures are refused
+## Why sampled, attached and `--min-lifetime` captures are refused
 
 `--sample N` records one allocation in N, so totals and peaks are estimates; `attach` only sees
-allocations made after it connected, so everything allocated earlier looks like it never happened.
-A gate that fails builds has to compare exact numbers, so `heapscope-ci` exits 4 on both rather than
-risk a false alarm or a missed regression. `--min-lifetime` captures are accepted because the totals
-stay exact.
+allocations made after it connected, so everything allocated earlier looks like it never happened;
+`--min-lifetime` counts short-lived blocks instead of tracing them, so memory they hold at the
+busiest moment is missing from the peak. A gate that fails builds has to compare exact numbers, so
+`heapscope-ci` exits 4 on all three rather than risk a false alarm or a missed regression. Capture
+the gated scenario with plain `heapscope run`.
 
 ## 3. Put it in CI
 
@@ -131,8 +136,15 @@ verified on the build machine with a public key built into `heapscope-ci`; nothi
 
 * Store it as a CI **secret**, never in the repository or the pipeline file. The templates read it
   only in the gate step.
-* A missing, malformed or expired key is a hard failure (exit 3), not a warning. Founding-beta keys
-  expire 45 days after they were issued; ask for a fresh one before then.
+* A missing, malformed or wrongly signed key is a hard failure (exit 3). So is an expired key,
+  with one allowance: a paid key keeps working for 14 days after its expiry date and prints a
+  warning on every run (an annotation on GitHub Actions and Azure Pipelines), so a late renewal or
+  a failed card payment does not stop your builds at once. Founding-beta keys have no grace period
+  and expire 45 days after they were issued; ask for a fresh one before then. An expired key is
+  never skipped silently.
+* The check is offline and uses the build machine's clock. It is a licence term, not copy
+  protection.
+* The gate removes `HEAPSCOPE_LICENSE` from the environment of the program it profiles.
 
 ## Troubleshooting
 

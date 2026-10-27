@@ -35,6 +35,8 @@ First beta, for the founding users.
   (slot 0 of a pool sits at its backing block's address): the block stays live until it is freed,
   and its pool objects are counted on top of it. The trace format is now 1.1 (a `PoolFree` event);
   1.0 traces still read as before.
+- The binaries and the capture DLL carry the crate version in their version resource, and the
+  toolchain is pinned in `rust-toolchain.toml`.
 - If the `heapscope` that controls a capture ends in any way (killed, closed console, closed output pipe),
   the capture DLL notices and finishes the trace on its own; `run` puts the target in a job object so
   it ends with the CLI. `attach` no longer panics when its output is closed.
@@ -62,8 +64,16 @@ First beta, for the founding users.
 
 ### CI gate (paid tier)
 - `heapscope-ci` fails a build on a memory regression against a baseline in your repository,
-  licensed offline. Templates for GitHub Actions (tested) and Azure Pipelines (not yet run on Azure) and a demo project are in
-  `ci-templates/` and `examples/ci-demo/`; see `docs/ci-gate.md`.
+  licensed offline. Templates for GitHub Actions and Azure Pipelines and a demo project are in
+  `ci-templates/` and `examples/ci-demo/`; see `docs/ci-gate.md`. The GitHub template ran on the
+  demo as a manual workflow; its pull-request path and the Azure template have not run on a real
+  pipeline yet.
+- The gate refuses `--min-lifetime` captures as well as sampled and attached ones (their peak is
+  understated), names the site that grew most for each metric, passes `--suppressions` to
+  `heapscope analyze` with `--run`, keeps the licence key out of the profiled program's
+  environment, and with no `--fail-on` prints the comparison and exits 0. Baselines made by an
+  earlier build must be made again (`heapscope-ci baseline update`).
+- A paid licence key keeps working for 14 days after it expires, with a warning; beta keys do not.
 
 ### Known limits
 - Windows x64 only; MSVC-built programs are the tested case.

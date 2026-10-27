@@ -23,7 +23,7 @@ Questions and feedback: GitHub Discussions on this repository.
 
 ## Build from source
 
-Requirements: Windows 10/11 x64, Rust stable (MSVC toolchain, pinned by `rust-toolchain.toml`),
+Requirements: Windows 10/11 x64, Rust (MSVC toolchain, pinned to an exact version by `rust-toolchain.toml`),
 Visual Studio Build Tools with the Windows SDK (for the version resource), and CMake for the samples.
 
 ```

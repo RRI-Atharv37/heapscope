@@ -1,95 +1,156 @@
 name: release
 
-# Tag v* -> build -> (sign with SignPath once approved) -> package -> GitHub Release.
-# Builds what ships: no actions/cache, Cargo.lock is committed and --locked is used, and all build
-# settings live in this repository (SignPath checks the origin of what it signs).
+# Tag v<crate version>[-suffix] -> build and test the release profile -> (sign with SignPath once
+# approved) -> GitHub Release.
+#
+# Three jobs, so that each holds only the permissions it needs:
+#   build    read-only; builds, tests the release binaries on the sample programs, packages
+#   sign     id-token (SignPath origin verification) and the SignPath token; no write access
+#   publish  contents: write; downloads the finished zip and creates the release
+# Builds what ships: no actions/cache, Cargo.lock is committed and --locked is used, every action
+# is pinned to a full commit SHA, and all build settings live in this repository (SignPath checks
+# the origin of what it signs).
 #
 # Signing is skipped until the repository variable SIGNPATH_ORGANIZATION_ID is set (after the
 # SignPath Foundation approves the project) together with the secret SIGNPATH_API_TOKEN and the
-# variables SIGNPATH_PROJECT_SLUG, SIGNPATH_POLICY_SLUG and SIGNPATH_SIGNING_POLICY_SLUG.
+# variables SIGNPATH_PROJECT_SLUG and SIGNPATH_SIGNING_POLICY_SLUG.
 # Until then the release is published unsigned and marked as such.
 on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write   # create the release
-  id-token: write   # SignPath origin verification
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  release:
+  build:
     runs-on: windows-latest
-    env:
-      SIGN: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: The tag is v<crate version> with an optional -suffix
+        id: version
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $crate = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          if ($tag -notmatch '^v(?<core>\d+\.\d+\.\d+)(?<suffix>-[0-9A-Za-z.-]+)?$') { throw "tag $tag is not v<major>.<minor>.<patch>[-suffix]" }
+          if ($Matches.core -ne $crate) { throw "tag $tag is for $($Matches.core) but the crate version is $crate" }
+          "version=$($tag.TrimStart('v'))" >> $env:GITHUB_OUTPUT
+          "prerelease=$([bool]$Matches.suffix)".ToLower() >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - name: Report template is up to date
         working-directory: report
         run: |
-          npm ci
+          npm ci --ignore-scripts
           npm run build
           git diff --exit-code -- ../crates/heapscope-report/assets/report-template.html
-      - name: Check the tag matches the crate version
+      - name: Build the sample programs (the capture tests run on them)
+        run: |
+          cmake -S samples -B build/samples
+          cmake --build build/samples --config RelWithDebInfo
+      # Test the profile that ships: release binaries (LTO, panic=abort paths, wrapping
+      # arithmetic differ from debug). A missing sample program fails the run.
+      - name: Build and test the release profile
+        env:
+          HEAPSCOPE_REQUIRE_SAMPLES: "1"
+        run: |
+          cargo build --workspace --release --locked
+          cargo test --workspace --release --locked
+      - name: Package
         shell: pwsh
         run: |
-          $tag = $env:GITHUB_REF_NAME.TrimStart('v')
-          $crate = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches.Groups[1].Value
-          # 0.1.0-beta style tags are allowed to carry a suffix after the crate version.
-          if (-not $tag.StartsWith($crate)) { throw "tag $tag does not start with the crate version $crate" }
-      - name: Test
-        run: |
-          cargo build --workspace --locked
-          cargo test --workspace --locked
-      - name: Build and stage
-        shell: pwsh
-        run: |
-          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $version = "${{ steps.version.outputs.version }}"
           ./scripts/package-beta.ps1 -Version $version
           # Stage the binaries separately so they can be signed before they are zipped.
           $stage = "build/dist/heapscope-$version"
           Compress-Archive -Path "$stage/heapscope.exe", "$stage/heapscope_capture.dll" -DestinationPath build/unsigned-binaries.zip -Force
-          "VERSION=$version" >> $env:GITHUB_ENV
-
-      - name: Upload binaries for signing
-        if: env.SIGN == 'true'
-        id: upload
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist
+          path: build/dist
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: upload-unsigned
         with:
           name: unsigned-binaries
           path: build/unsigned-binaries.zip
-      - name: Sign with SignPath
-        if: env.SIGN == 'true'
-        uses: signpath/github-action-submit-signing-request@v1
+          if-no-files-found: error
+
+  sign:
+    needs: build
+    if: vars.SIGNPATH_ORGANIZATION_ID != ''
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write   # SignPath origin verification
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dist
+          path: build/dist
+      - uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
           project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
           signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+          github-artifact-id: ${{ needs.build.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: build/signed
       - name: Repack with the signed binaries
-        if: env.SIGN == 'true'
         shell: pwsh
         run: |
-          $stage = "build/dist/heapscope-$env:VERSION"
-          Expand-Archive build/signed/*.zip -DestinationPath $stage -Force
-          Remove-Item "build/dist/heapscope-$env:VERSION.zip"
-          Compress-Archive -Path "$stage/*" -DestinationPath "build/dist/heapscope-$env:VERSION.zip"
-          Get-AuthenticodeSignature "$stage/heapscope.exe", "$stage/heapscope_capture.dll" | Format-Table Path, Status
+          $version = "${{ needs.build.outputs.version }}"
+          $stage = "build/dist/heapscope-$version"
+          Expand-Archive (Get-ChildItem build/signed/*.zip).FullName -DestinationPath $stage -Force
+          Remove-Item "build/dist/heapscope-$version.zip"
+          Compress-Archive -Path "$stage/*" -DestinationPath "build/dist/heapscope-$version.zip"
+          $sigs = Get-AuthenticodeSignature "$stage/heapscope.exe", "$stage/heapscope_capture.dll"
+          $sigs | Format-Table Path, Status
+          if ($sigs | Where-Object { $_.Status -ne 'Valid' }) { throw 'a signed binary does not have a valid signature' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist-signed
+          path: build/dist
+          if-no-files-found: error
 
+  publish:
+    needs: [build, sign]
+    # `sign` is skipped (not failed) until SignPath is set up.
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.sign.result == 'success' || needs.sign.result == 'skipped') }}
+    runs-on: windows-latest
+    permissions:
+      contents: write   # create the release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.sign.result == 'success' && 'dist-signed' || 'dist' }}
+          path: build/dist
       - name: Checksum and publish
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          $zip = "build/dist/heapscope-$env:VERSION.zip"
+          $version = "${{ needs.build.outputs.version }}"
+          $zip = "build/dist/heapscope-$version.zip"
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
           "$hash  $(Split-Path $zip -Leaf)" > "$zip.sha256"
-          $signed = if ($env:SIGN -eq 'true') { 'Signed with SignPath Foundation (see CODE_SIGNING_POLICY.md).' } else { 'UNSIGNED build: Windows may warn or block it. See docs/troubleshooting.md.' }
+          $signed = if ('${{ needs.sign.result }}' -eq 'success') { 'Signed with SignPath Foundation (see CODE_SIGNING_POLICY.md).' } else { 'UNSIGNED build: Windows may warn or block it. See docs/troubleshooting.md.' }
           "$signed`n`nSHA-256: ``$hash```n`nChanges: CHANGELOG.md" > notes.md
-          $pre = if ($env:VERSION -match '-') { '--prerelease' } else { '' }
-          gh release create $env:GITHUB_REF_NAME $zip "$zip.sha256" $pre --title $env:GITHUB_REF_NAME --notes-file notes.md
+          $ghArgs = @('release', 'create', $env:GITHUB_REF_NAME, $zip, "$zip.sha256", '--verify-tag', '--title', $env:GITHUB_REF_NAME, '--notes-file', 'notes.md')
+          if ('${{ needs.build.outputs.prerelease }}' -eq 'true') { $ghArgs += '--prerelease' }
+          & gh @ghArgs
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed ($LASTEXITCODE)" }
