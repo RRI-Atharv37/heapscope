@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # HeapScope memory gate for GitHub Actions. Copy to .github/workflows/heapscope.yml.
 # Setup guide: docs/ci-gate.md
 #

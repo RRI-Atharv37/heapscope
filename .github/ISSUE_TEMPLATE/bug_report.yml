@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Check [troubleshooting](../blob/main/docs/troubleshooting.md) first. Do not attach traces that contain private data; a trace holds module paths and function names.
+        Check [troubleshooting](../blob/main/docs/troubleshooting.md) first. Do not attach traces that contain private data; a trace holds module paths, function names, the full command line and the path of the executable. Traces, JSON and reports all embed the command line, so remove secrets passed as arguments first.
   - type: input
     id: version
     attributes:

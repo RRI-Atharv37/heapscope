@@ -349,3 +349,44 @@ fn diff_of_two_real_runs_ignores_addresses_and_finds_the_changed_sites() {
         "a site with nothing live was reported: {changed:?}"
     );
 }
+
+/// Pins the documented behaviour (docs/faq.md, docs/report-guide.md): the command line, secrets
+/// included, is embedded in the summary JSON and the trace.
+#[test]
+fn command_line_is_embedded_in_summary_and_trace() {
+    let Some(dir) = samples_dir() else { return };
+    let work = scratch("e2e-command-line");
+    let trace = work.join("t.hstrace");
+    let expected = work.join("expected-secret-hunter2.json");
+    let out = heapscope()
+        .arg("run")
+        .arg("-o")
+        .arg(&trace)
+        .arg("--")
+        .arg(sample(&dir, "leak"))
+        .arg("--expected")
+        .arg(&expected)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "run failed: {}", stdout_text(&out));
+    let summary = work.join("summary.json");
+    let out = heapscope()
+        .arg("analyze")
+        .arg(&trace)
+        .arg("-o")
+        .arg(&summary)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze failed: {}",
+        stdout_text(&out)
+    );
+    let json = Json::parse(&std::fs::read_to_string(&summary).unwrap()).expect("summary parses");
+    let line = json
+        .get("capture")
+        .and_then(|c| c.get("command_line"))
+        .and_then(Json::as_str)
+        .expect("summary has a command_line");
+    assert!(line.contains("secret-hunter2"), "{line}");
+}

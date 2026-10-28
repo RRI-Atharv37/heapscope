@@ -10,7 +10,9 @@ First beta, for the founding users.
 - Covers the C and C++ runtime and `HeapAlloc`, with dynamic or static CRT. `VirtualAlloc` and
   kernel handles are not recorded yet. Custom allocators can report through the optional
   MIT-licensed header in `include/`.
-- `--sample N` and `--min-lifetime` lower the overhead; the report says when numbers are estimates.
+- `--sample N` lowers the capture overhead and `--min-lifetime` shrinks the trace of programs with
+  heavy `new`/`delete` churn (it does not make the program faster); the report says when numbers
+  are estimates.
 - `--sample N` now decides per allocation instead of per address, so the estimate for a site that
   reuses a few addresses (a hot `new`/`delete` pair) is no longer off by a factor of two or more.
   The error is about `1 / sqrt(allocations kept)`; see `docs/capture-options.md`.
@@ -22,6 +24,11 @@ First beta, for the founding users.
 - The optional header `heapscope.h` works after `heapscope attach` (it looks for the DLL again
   until it finds it), no longer includes `<windows.h>` or defines `WIN32_LEAN_AND_MEAN`, evaluates
   every argument at most once, and is tested as C89, C11 and C++.
+- `heapscope attach` no longer needs Windows 10 1709: it looks up `IsWow64Process2` at run time and falls back to `IsWow64Process`.
+- The zip carries `THIRD-PARTY-NOTICES.txt` (MinHook and the Rust crates). The CI templates are MIT licensed and
+  carry an SPDX header, so they can be copied into proprietary repositories.
+- Traces, JSON summaries and reports contain the full command line and executable path; the docs and the
+  issue template now say so.
 - `HEAPSCOPE_DLL` must be a full path to an existing file. A DLL from another HeapScope build is
   reported as such instead of being blamed on antivirus.
 - Frees made while a thread or the process shuts down are now recorded, so per-thread loader

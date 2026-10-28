@@ -4,6 +4,9 @@ This explains what HeapScope's leak candidates and snapshot diffs mean, and how 
 ones you know are fine. `heapscope analyze` prints the leak report (`--suppressions FILE` adds your own rules,
 `--no-builtin-suppressions` turns the built-in ones off), and `heapscope diff` compares traces.
 
+Traces, the JSON summary and the HTML report contain the full command line and the executable's
+path, so a secret passed as an argument ends up in them. Remove it before sharing a file.
+
 ## Leak candidates
 
 A leak candidate is an allocation that was still live when the trace ended. That is evidence of a

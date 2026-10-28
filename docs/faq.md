@@ -3,15 +3,19 @@
 ## Does profiling make my program GPL?
 
 No. HeapScope is a separate program that observes yours from outside; your program is not a
-derivative of it and keeps its own licence. The only file you may copy into your code is
-`include/heapscope/heapscope.h` (for [custom allocators](custom-allocators.md)), and it is MIT
-licensed. The rest of HeapScope is GPL-3.0-only, which applies if you modify and distribute
-HeapScope itself.
+derivative of it and keeps its own licence. The files you may copy into your code or
+repositories are `include/heapscope/heapscope.h` (for [custom allocators](custom-allocators.md))
+and the [CI templates](../ci-templates/LICENSE) in `ci-templates`; both are MIT licensed. The rest
+of HeapScope is GPL-3.0-only, which applies if you modify and distribute HeapScope itself.
 
 ## Does it send my data anywhere?
 
 No. Capture, analysis and reports all run on your machine, and the HTML report is one offline file.
 The CI gate checks its licence locally.
+
+Traces, the JSON summary and the HTML report do contain the full command line and the path of the
+profiled executable. Do not pass secrets as arguments to a program you profile, and look before you
+attach a file to an issue.
 
 Resolving symbols reads the program images named in the trace from your local disk (the same paths the
 capture recorded). Paths that are not plain local drive paths, such as network shares or device names, are

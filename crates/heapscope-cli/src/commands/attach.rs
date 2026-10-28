@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use heapscope_control::state;
+use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
 use windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE;
 use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
@@ -20,8 +21,9 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, MODULEENTRY32W, TH32CS_SNAPMODULE,
     TH32CS_SNAPMODULE32,
 };
+use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Threading::{
-    IsWow64Process2, OpenProcess, WaitForSingleObject, PROCESS_CREATE_THREAD,
+    IsWow64Process, OpenProcess, WaitForSingleObject, PROCESS_CREATE_THREAD,
     PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
 };
 
@@ -71,12 +73,25 @@ impl Process {
         unsafe { WaitForSingleObject(self.0, 0) == WAIT_OBJECT_0 }
     }
 
+    /// `IsWow64Process2` is looked up at run time (it needs Windows 10 1709 or Server 2016
+    /// 1709+); older systems fall back to `IsWow64Process`, which is enough on x64 Windows.
     fn is_32_bit(&self) -> bool {
-        let (mut process_machine, mut native_machine) = (0u16, 0u16);
-        // SAFETY: valid handle and out pointers. A non-zero machine means WOW64 (a 32-bit process).
+        type IsWow64Process2Fn = unsafe extern "system" fn(HANDLE, *mut u16, *mut u16) -> BOOL;
+        // SAFETY: valid handle and out pointers. A non-zero machine means WOW64 (a 32-bit process);
+        // the transmute restores the documented signature of the looked-up export.
         unsafe {
-            IsWow64Process2(self.0, &mut process_machine, &mut native_machine) != 0
-                && process_machine != 0
+            let module = GetModuleHandleW(windows_sys::w!("kernel32.dll"));
+            if let Some(f) = GetProcAddress(module, c"IsWow64Process2".as_ptr().cast()) {
+                let f = std::mem::transmute::<
+                    unsafe extern "system" fn() -> isize,
+                    IsWow64Process2Fn,
+                >(f);
+                let (mut process_machine, mut native_machine) = (0u16, 0u16);
+                return f(self.0, &mut process_machine, &mut native_machine) != 0
+                    && process_machine != 0;
+            }
+            let mut wow64: BOOL = 0;
+            IsWow64Process(self.0, &mut wow64) != 0 && wow64 != 0
         }
     }
 }

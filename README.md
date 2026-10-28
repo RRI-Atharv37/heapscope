@@ -69,5 +69,7 @@ local builds; see [capture options](docs/capture-options.md#attach) for what a b
 
 ## Licence
 
-GPL-3.0-only, see [LICENSE](LICENSE). The header in `include/heapscope` is MIT, see
-[LICENSE-MIT](include/heapscope/LICENSE-MIT).
+GPL-3.0-only, see [LICENSE](LICENSE). Two parts are MIT so you can copy them into your own code:
+the header in `include/heapscope` ([LICENSE-MIT](include/heapscope/LICENSE-MIT)) and the CI
+templates in `ci-templates` ([LICENSE](ci-templates/LICENSE)). Third-party code that ships in the
+binaries is listed in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).

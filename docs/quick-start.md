@@ -38,8 +38,8 @@ Build your own program with debug info (a `.pdb` next to the exe, or on `_NT_SYM
 report shows `module+0xoffset` instead of function names and lines.
 
 To profile a program that is already running, use `heapscope attach --pid 1234 --duration 30s`;
-that shows growth since the attach, not leaks. `--sample N` and `--min-lifetime` lower the
-overhead; see [capture options](capture-options.md).
+that shows growth since the attach, not leaks. `--sample N` lowers the
+overhead and `--min-lifetime` shrinks traces of allocation-heavy programs; see [capture options](capture-options.md).
 
 ## 3. Read the result
 

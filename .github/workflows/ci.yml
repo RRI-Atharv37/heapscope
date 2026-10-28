@@ -48,6 +48,9 @@ jobs:
       # next to heapscope.exe.
       - name: Build the CLI and capture DLL
         run: cargo build --workspace --locked
+      - name: No static import of IsWow64Process2
+        shell: pwsh
+        run: ./scripts/check-imports.ps1 -Exe target/x86_64-pc-windows-msvc/debug/heapscope.exe
       - name: Test (includes `heapscope run`/`attach` and the ground-truth e2e suite on the samples)
         env:
           HEAPSCOPE_REQUIRE_SAMPLES: "1"

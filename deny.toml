@@ -28,3 +28,7 @@ allow-wildcard-paths = true
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+
+# Not machine-checked: the minhook crate declares MIT but bundles the BSD-2-Clause C sources of
+# MinHook and HDE. BSD-2-Clause is on the allow list above; the notices are in
+# THIRD-PARTY-NOTICES.txt. A [[licenses.clarify]] entry for it was tried and cargo-deny ignored it.
